@@ -46,9 +46,16 @@ function effectivePlan(plan: string, expiresAt: number | null): string {
  * 鉴权中间件: 接受两种凭据
  *  1. JWT (Bearer eyJ...)      — App 业务接口
  *  2. 设备令牌 (Bearer dt_...) — 长期令牌, MCP 端点用(orion 的 MCP 配置无 OAuth 流程)
+ *
+ * /mcp 路径额外接受 ?token= 查询参数: orion 端的 MCP 配置只有 URL 一个字段,
+ * 没有自定义请求头的入口, 设备令牌只能编进 URL。令牌是 64 位 hex 长随机串,
+ * 泄漏面可控(仅出现在 MCP 配置里); 其它路径一律不接受 query 传参。
  */
 export async function requireAuth(c: Context<Env>, next: Next) {
-  const token = bearer(c);
+  let token = bearer(c);
+  if (!token && c.req.path.includes("/mcp")) {
+    token = c.req.query("token") ?? null;
+  }
   if (!token) throw errors.unauthorized();
 
   const db = c.get("db");
