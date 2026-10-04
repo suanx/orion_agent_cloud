@@ -91,7 +91,6 @@ tr:hover td { background:rgba(255,255,255,.7); }
   overflow-y:auto;
 }
 #drawer .brand { display:flex; align-items:center; gap:9px; padding:2px 8px 16px; font-size:17px; font-weight:900; letter-spacing:.5px; }
-#drawer .brand .logo { font-size:22px; }
 .grp { font-size:11px; letter-spacing:2.5px; color:var(--text-dim); font-weight:800; margin:16px 10px 6px; }
 .nav-item {
   display:flex; align-items:center; gap:10px; width:100%;
@@ -104,9 +103,14 @@ tr:hover td { background:rgba(255,255,255,.7); }
   color:#fff; background:linear-gradient(120deg,var(--a1),var(--a2));
   box-shadow:0 6px 18px color-mix(in srgb, var(--a1) 35%, transparent);
 }
-.nav-item .ico { width:20px; text-align:center; }
+/* ---- 黑白线条图标 ---- */
+.ic { width:18px; height:18px; flex:none; display:inline-block; vertical-align:-4px;
+  fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.nav-item .ic { width:18px; height:18px; vertical-align:middle; }
+.panel h2 .ic { width:17px; height:17px; vertical-align:-3px; }
 #drawer .foot { margin-top:auto; padding-top:16px; border-top:1px solid var(--border); display:flex; gap:8px; }
-#drawer .foot .btn { flex:1; padding:8px 10px; font-size:13px; }
+#drawer .foot .btn { flex:1; padding:8px 10px; font-size:13px;
+  display:inline-flex; align-items:center; justify-content:center; gap:5px; }
 
 /* 桌面折叠 */
 body.collapsed #drawer { margin-left:-236px; }
@@ -168,12 +172,27 @@ section.view.active { display:block; }
 </style>
 </head>
 <body>
+<svg style="display:none" aria-hidden="true">
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5.5 9.5V20a1 1 0 0 0 1 1H10v-5.5h4V21h3.5a1 1 0 0 0 1-1V9.5"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 8-8"/><path d="m15.5 6.5 2.5 2.5"/><path d="m18 4 2 2"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M16 5.2a3.5 3.5 0 0 1 0 5.6"/><path d="M17.5 14.3c1.8.9 3 2.7 3 4.7"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M21 20H3"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v5.5c0 4.2 2.9 7.6 7 9.5 4.1-1.9 7-5.3 7-9.5V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></symbol>
+  <symbol id="i-contrast" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3.5 6h.01"/><path d="M3.5 12h.01"/><path d="M3.5 18h.01"/></symbol>
+  <symbol id="i-diamond" viewBox="0 0 24 24"><path d="m12 3 8 9-8 9-8-9 8-9Z"/></symbol>
+</svg>
 <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
 
 <!-- 登录 -->
 <div id="login">
   <div class="box glass">
-    <div class="grad-text" style="font-size:34px; font-weight:900; letter-spacing:1px;">&#9670; Orion Cloud</div>
+    <div style="display:flex; align-items:center; justify-content:center; gap:10px;">
+      <svg class="ic" style="width:32px; height:32px; stroke-width:1.6;" aria-hidden="true"><use href="#i-diamond"></use></svg>
+      <span class="grad-text" style="font-size:34px; font-weight:900; letter-spacing:1px;">Orion Cloud</span>
+    </div>
     <h1>管理台</h1>
     <p>输入管理令牌（ADMIN_TOKEN）进入</p>
     <input id="tk" type="password" placeholder="ADMIN_TOKEN">
@@ -185,23 +204,23 @@ section.view.active { display:block; }
 <!-- 左侧抽屉(功能分类导航) -->
 <div id="mask" onclick="toggleDrawer()"></div>
 <aside id="drawer">
-  <div class="brand"><span class="logo grad-text">&#9670;</span> Orion Cloud</div>
+  <div class="brand"><svg class="ic" style="width:20px; height:20px;" aria-hidden="true"><use href="#i-diamond"></use></svg> Orion Cloud</div>
 
   <div class="grp">概 览</div>
-  <button class="nav-item active" data-v="dash" onclick="show('dash')"><span class="ico">&#128202;</span> 仪表盘</button>
+  <button class="nav-item active" data-v="dash" onclick="show('dash')"><svg class="ic" aria-hidden="true"><use href="#i-home"></use></svg> 首页</button>
 
   <div class="grp">授权管理</div>
-  <button class="nav-item" data-v="lic" onclick="show('lic')"><span class="ico">&#128273;</span> 卡密管理</button>
+  <button class="nav-item" data-v="lic" onclick="show('lic')"><svg class="ic" aria-hidden="true"><use href="#i-key"></use></svg> 卡密管理</button>
 
   <div class="grp">用户管理</div>
-  <button class="nav-item" data-v="usr" onclick="show('usr')"><span class="ico">&#128101;</span> 用户列表</button>
+  <button class="nav-item" data-v="usr" onclick="show('usr')"><svg class="ic" aria-hidden="true"><use href="#i-users"></use></svg> 用户列表</button>
 
   <div class="grp">运营监控</div>
-  <button class="nav-item" data-v="usage" onclick="show('usage')"><span class="ico">&#128200;</span> 用量统计</button>
-  <button class="nav-item" data-v="audit" onclick="show('audit')"><span class="ico">&#128737;</span> 审计日志</button>
+  <button class="nav-item" data-v="usage" onclick="show('usage')"><svg class="ic" aria-hidden="true"><use href="#i-chart"></use></svg> 用量统计</button>
+  <button class="nav-item" data-v="audit" onclick="show('audit')"><svg class="ic" aria-hidden="true"><use href="#i-shield"></use></svg> 审计日志</button>
 
   <div class="foot">
-    <button class="btn ghost" onclick="togglePop(event)" title="配色主题">&#127912; 主题</button>
+    <button class="btn ghost" onclick="togglePop(event)" title="配色主题"><svg class="ic" style="width:15px; height:15px;" aria-hidden="true"><use href="#i-contrast"></use></svg> 主题</button>
     <button class="btn ghost" onclick="doLogout()">退出</button>
   </div>
 </aside>
@@ -210,8 +229,8 @@ section.view.active { display:block; }
 <div id="app">
  <div class="inner">
   <header class="top">
-    <button class="btn ghost icon" onclick="toggleDrawer()" title="展开/收起导航">&#9776;</button>
-    <h1 id="pageTitle">仪表盘</h1>
+    <button class="btn ghost icon" onclick="toggleDrawer()" title="展开/收起导航"><svg class="ic" style="width:17px; height:17px;" aria-hidden="true"><use href="#i-menu"></use></svg></button>
+    <h1 id="pageTitle">首页</h1>
     <div class="spacer"></div>
     <div class="rel">
       <div id="themePop" class="theme-pop glass" style="display:none;">
@@ -236,14 +255,14 @@ section.view.active { display:block; }
       <div class="stat glass"><div class="lbl">今日中继请求</div><div class="num grad-text" id="sUsage">-</div></div>
     </div>
     <div class="panel glass">
-      <h2>&#128204; 概览</h2>
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-pin"></use></svg> 概览</h2>
       <div class="dim" id="dashNote" style="font-size:13.5px; line-height:1.8;">加载中...</div>
     </div>
   </section>
 
   <section id="v-lic" class="view">
     <div class="panel glass">
-      <h2>&#128273; 生成卡密</h2>
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-key"></use></svg> 生成卡密</h2>
       <div class="row">
         <select id="gPlan"><option value="trial">试用 trial</option><option value="pro">专业 pro</option><option value="lifetime">永久 lifetime</option></select>
         <input id="gDays" type="number" value="30" min="1" style="width:110px;" title="时长(天)">
@@ -260,7 +279,7 @@ section.view.active { display:block; }
       </div>
     </div>
     <div class="panel glass">
-      <h2>&#128203; 卡密列表</h2>
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-list"></use></svg> 卡密列表</h2>
       <div class="row">
         <input id="fBatch" placeholder="按批次筛选" style="width:160px;">
         <select id="fStatus"><option value="">全部状态</option><option value="unused">未使用</option><option value="used">已激活</option><option value="revoked">已作废</option></select>
@@ -272,21 +291,21 @@ section.view.active { display:block; }
 
   <section id="v-usr" class="view">
     <div class="panel glass">
-      <h2>&#128101; 用户列表 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadUsers()">刷新</button></h2>
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-users"></use></svg> 用户列表 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadUsers()">刷新</button></h2>
       <div class="scroll-x"><table id="usrTable"></table></div>
     </div>
   </section>
 
   <section id="v-usage" class="view">
     <div class="panel glass">
-      <h2>&#128200; 用量统计 <span class="dim" style="font-size:12px; font-weight:400;">(每日, UTC+8)</span></h2>
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-chart"></use></svg> 用量统计 <span class="dim" style="font-size:12px; font-weight:400;">(每日, UTC+8)</span></h2>
       <div class="scroll-x"><table id="usageTable"></table></div>
     </div>
   </section>
 
   <section id="v-audit" class="view">
     <div class="panel glass">
-      <h2>&#128737; 审计日志 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadAudit()">刷新</button></h2>
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-shield"></use></svg> 审计日志 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadAudit()">刷新</button></h2>
       <div class="scroll-x"><table id="auditTable"></table></div>
     </div>
   </section>
@@ -298,7 +317,7 @@ section.view.active { display:block; }
 // EdgeOne 部署时函数挂在 /api/* 下(前缀 /api); 本地 dev 直接是根路径。
 var APIBASE = (location.pathname.indexOf('/api') === 0 ? '/api' : '') + '/admin';
 var TOKEN = localStorage.getItem('orion_admin_token') || '';
-var VIEW_META = { dash:'仪表盘', lic:'卡密管理', usr:'用户列表', usage:'用量统计', audit:'审计日志' };
+var VIEW_META = { dash:'首页', lic:'卡密管理', usr:'用户列表', usage:'用量统计', audit:'审计日志' };
 
 function api(path, opts) {
   opts = opts || {};
@@ -379,7 +398,7 @@ function enterApp() {
   show('dash');
 }
 
-// ---------- 仪表盘 ----------
+// ---------- 首页 ----------
 function loadDashboard() {
   Promise.all([api('/users'), api('/licenses'), api('/usage')]).then(function(rs) {
     var users = rs[0].users || [], lics = rs[1].licenses || [], usage = rs[2].usage || [];
