@@ -1,8 +1,9 @@
 /**
  * 云端管理台单页应用（无依赖, 内联 HTML/CSS/JS）。
  * 由 GET /admin 直接返回, 数据全部走既有 /api/admin/* 接口(Bearer ADMIN_TOKEN)。
- * UI: 磨砂液态玻璃(多层渐变光斑 + backdrop-filter), 5 套配色主题 + 明暗模式,
- *     主题/模式/令牌持久化在 localStorage。
+ * UI: 纯白背景 + 磨砂液态玻璃(backdrop-filter), 左侧抽屉式导航(桌面可折叠/移动端浮出),
+ *     功能按「概览/授权管理/用户管理/运营监控」分组, 5 套配色主题,
+ *     主题/令牌持久化在 localStorage。
  * 注意: 本文件是 TS 模板字符串, 页面 JS 一律用单引号字符串拼接,
  *       不用反引号与 ${, 避免转义问题。
  */
@@ -16,47 +17,41 @@ export function adminHtml(): string {
 <style>
 :root {
   --a1: #22d3ee; --a2: #818cf8;
-  --blob1: rgba(34,211,238,.5); --blob2: rgba(129,140,248,.45); --blob3: rgba(167,139,250,.4);
-}
-:root[data-theme="violet"] { --a1:#a78bfa; --a2:#f472b6; --blob1:rgba(167,139,250,.5); --blob2:rgba(244,114,182,.4); --blob3:rgba(129,140,248,.4); }
-:root[data-theme="forest"] { --a1:#34d399; --a2:#a3e635; --blob1:rgba(52,211,153,.45); --blob2:rgba(163,230,53,.35); --blob3:rgba(45,212,191,.4); }
-:root[data-theme="sunset"] { --a1:#fb923c; --a2:#f43f5e; --blob1:rgba(251,146,60,.45); --blob2:rgba(244,63,94,.4); --blob3:rgba(250,204,21,.35); }
-:root[data-theme="rose"]   { --a1:#fb7185; --a2:#c084fc; --blob1:rgba(251,113,133,.45); --blob2:rgba(192,132,252,.4); --blob3:rgba(244,114,182,.35); }
+  --blob1: rgba(34,211,238,.42); --blob2: rgba(129,140,248,.38); --blob3: rgba(167,139,250,.34);
 
-:root[data-mode="dark"] {
-  --text:#f1f5f9; --text-dim:#94a3b8;
-  --glass:rgba(255,255,255,.055); --glass-strong:rgba(255,255,255,.09);
-  --border:rgba(255,255,255,.14); --input:rgba(255,255,255,.07);
-  --page:#0b1020; --danger:#f87171; --ok:#4ade80;
+  --text:#172033; --text-dim:#6b7a90;
+  --glass:rgba(255,255,255,.66); --glass-strong:rgba(255,255,255,.84);
+  --border:rgba(20,35,70,.09); --input:rgba(255,255,255,.8);
+  --page:#ffffff; --danger:#e11d48; --ok:#059669;
+  --shadow:0 10px 40px rgba(30,50,90,.10);
 }
-:root[data-mode="light"] {
-  --text:#1e293b; --text-dim:#64748b;
-  --glass:rgba(255,255,255,.55); --glass-strong:rgba(255,255,255,.72);
-  --border:rgba(255,255,255,.7); --input:rgba(255,255,255,.6);
-  --page:#eef2f9; --danger:#e11d48; --ok:#059669;
-}
+:root[data-theme="violet"] { --a1:#a78bfa; --a2:#f472b6; --blob1:rgba(167,139,250,.4); --blob2:rgba(244,114,182,.34); --blob3:rgba(129,140,248,.34); }
+:root[data-theme="forest"] { --a1:#34d399; --a2:#a3e635; --blob1:rgba(52,211,153,.36); --blob2:rgba(163,230,53,.3); --blob3:rgba(45,212,191,.34); }
+:root[data-theme="sunset"] { --a1:#fb923c; --a2:#f43f5e; --blob1:rgba(251,146,60,.36); --blob2:rgba(244,63,94,.32); --blob3:rgba(250,204,21,.3); }
+:root[data-theme="rose"]   { --a1:#fb7185; --a2:#c084fc; --blob1:rgba(251,113,133,.36); --blob2:rgba(192,132,252,.32); --blob3:rgba(244,114,182,.3); }
+
 * { margin:0; padding:0; box-sizing:border-box; }
 body {
   min-height:100vh; font-family:"PingFang SC","Microsoft YaHei",-apple-system,sans-serif;
   background:var(--page); color:var(--text); overflow-x:hidden;
-  transition:background .5s, color .3s;
 }
-/* ---- 液态光斑背景 ---- */
-.blob { position:fixed; border-radius:50%; filter:blur(90px); z-index:-1; animation:drift 22s ease-in-out infinite alternate; }
-.blob.b1 { width:46vw; height:46vw; background:var(--blob1); top:-14vw; left:-10vw; }
-.blob.b2 { width:38vw; height:38vw; background:var(--blob2); bottom:-12vw; right:-8vw; animation-delay:-7s; }
-.blob.b3 { width:30vw; height:30vw; background:var(--blob3); top:38vh; left:52vw; animation-delay:-14s; }
-@keyframes drift { from { transform:translate(0,0) scale(1); } to { transform:translate(5vw,4vh) scale(1.15); } }
+button { cursor:pointer; font-family:inherit; }
+
+/* ---- 纯白底 + 柔和液态光斑(低透明度, 观感仍是白底) ---- */
+.blob { position:fixed; border-radius:50%; filter:blur(100px); z-index:-1; opacity:.55; animation:drift 24s ease-in-out infinite alternate; }
+.blob.b1 { width:44vw; height:44vw; background:var(--blob1); top:-16vw; left:-8vw; }
+.blob.b2 { width:36vw; height:36vw; background:var(--blob2); bottom:-14vw; right:-6vw; animation-delay:-8s; }
+.blob.b3 { width:26vw; height:26vw; background:var(--blob3); top:34vh; left:56vw; animation-delay:-16s; }
+@keyframes drift { from { transform:translate(0,0) scale(1); } to { transform:translate(5vw,4vh) scale(1.14); } }
 
 /* ---- 磨砂玻璃 ---- */
 .glass {
-  background:var(--glass); backdrop-filter:blur(24px) saturate(1.7);
-  -webkit-backdrop-filter:blur(24px) saturate(1.7);
+  background:var(--glass); backdrop-filter:blur(28px) saturate(1.8);
+  -webkit-backdrop-filter:blur(28px) saturate(1.8);
   border:1px solid var(--border); border-radius:20px;
-  box-shadow:0 8px 32px rgba(2,6,23,.18);
+  box-shadow:var(--shadow);
 }
 .grad-text { background:linear-gradient(120deg,var(--a1),var(--a2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
-button { cursor:pointer; font-family:inherit; }
 .btn {
   border:none; border-radius:12px; padding:9px 18px; font-size:14px; font-weight:600;
   color:#fff; background:linear-gradient(120deg,var(--a1),var(--a2));
@@ -64,37 +59,67 @@ button { cursor:pointer; font-family:inherit; }
 }
 .btn:hover { transform:translateY(-1px); box-shadow:0 6px 18px color-mix(in srgb, var(--a1) 40%, transparent); }
 .btn:disabled { opacity:.5; transform:none; }
-.btn.ghost { background:var(--input); color:var(--text); border:1px solid var(--border); }
-.btn.danger { background:linear-gradient(120deg,#f87171,#e11d48); }
+.btn.ghost { background:var(--glass-strong); color:var(--text); border:1px solid var(--border); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); }
+.btn.danger { background:linear-gradient(120deg,#fb7185,#e11d48); }
+.btn.icon { padding:8px 13px; font-size:16px; line-height:1; }
 input, select {
   background:var(--input); border:1px solid var(--border); border-radius:12px;
   padding:9px 13px; color:var(--text); font-size:14px; outline:none; font-family:inherit;
   transition:border .2s, box-shadow .2s;
 }
 input:focus, select:focus { border-color:var(--a1); box-shadow:0 0 0 3px color-mix(in srgb, var(--a1) 25%, transparent); }
-select option { color:#1e293b; }
+select option { color:#172033; }
 table { width:100%; border-collapse:collapse; font-size:13.5px; }
 th { text-align:left; padding:10px 12px; color:var(--text-dim); font-weight:600; border-bottom:1px solid var(--border); white-space:nowrap; }
 td { padding:10px 12px; border-bottom:1px solid var(--border); word-break:break-all; }
-tr:hover td { background:var(--input); }
+tr:hover td { background:rgba(255,255,255,.7); }
 .badge { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:600; }
-.badge.used { background:color-mix(in srgb, var(--a1) 22%, transparent); color:var(--a1); }
-.badge.unused { background:color-mix(in srgb, var(--ok) 18%, transparent); color:var(--ok); }
-.badge.revoked, .badge.banned, .badge.error { background:color-mix(in srgb, var(--danger) 18%, transparent); color:var(--danger); }
+.badge.used { background:color-mix(in srgb, var(--a1) 18%, transparent); color:var(--a1); }
+.badge.unused { background:color-mix(in srgb, var(--ok) 14%, transparent); color:var(--ok); }
+.badge.revoked, .badge.banned, .badge.error { background:color-mix(in srgb, var(--danger) 12%, transparent); color:var(--danger); }
 .mono { font-family:ui-monospace,Consolas,monospace; }
 .dim { color:var(--text-dim); }
 
-/* ---- 布局 ---- */
-#app { display:none; max-width:1180px; margin:0 auto; padding:22px 18px 60px; }
-header.top { display:flex; align-items:center; gap:14px; margin-bottom:20px; flex-wrap:wrap; }
-header.top h1 { font-size:21px; font-weight:800; letter-spacing:.5px; }
-header.top .spacer { flex:1; }
-nav.tabs { display:flex; gap:6px; padding:6px; border-radius:16px; flex-wrap:wrap; margin-bottom:22px; }
-nav.tabs button {
-  border:none; background:transparent; color:var(--text-dim); font-size:14px; font-weight:600;
-  padding:9px 20px; border-radius:12px; transition:all .2s;
+/* ---- 左侧抽屉 ---- */
+#drawer {
+  position:fixed; left:0; top:0; bottom:0; width:236px; z-index:40;
+  background:var(--glass-strong); backdrop-filter:blur(30px) saturate(1.9);
+  -webkit-backdrop-filter:blur(30px) saturate(1.9);
+  border-right:1px solid var(--border);
+  padding:20px 14px; display:flex; flex-direction:column;
+  transition:margin-left .25s ease, transform .25s ease;
+  overflow-y:auto;
 }
-nav.tabs button.active { color:#fff; background:linear-gradient(120deg,var(--a1),var(--a2)); box-shadow:0 4px 14px color-mix(in srgb, var(--a1) 35%, transparent); }
+#drawer .brand { display:flex; align-items:center; gap:9px; padding:2px 8px 16px; font-size:17px; font-weight:900; letter-spacing:.5px; }
+#drawer .brand .logo { font-size:22px; }
+.grp { font-size:11px; letter-spacing:2.5px; color:var(--text-dim); font-weight:800; margin:16px 10px 6px; }
+.nav-item {
+  display:flex; align-items:center; gap:10px; width:100%;
+  border:none; background:transparent; color:var(--text);
+  font-size:14px; font-weight:600; padding:10px 12px; border-radius:12px;
+  text-align:left; transition:background .18s, color .18s, box-shadow .18s;
+}
+.nav-item:hover { background:rgba(255,255,255,.9); box-shadow:0 4px 14px rgba(30,50,90,.07); }
+.nav-item.active {
+  color:#fff; background:linear-gradient(120deg,var(--a1),var(--a2));
+  box-shadow:0 6px 18px color-mix(in srgb, var(--a1) 35%, transparent);
+}
+.nav-item .ico { width:20px; text-align:center; }
+#drawer .foot { margin-top:auto; padding-top:16px; border-top:1px solid var(--border); display:flex; gap:8px; }
+#drawer .foot .btn { flex:1; padding:8px 10px; font-size:13px; }
+
+/* 桌面折叠 */
+body.collapsed #drawer { margin-left:-236px; }
+body.collapsed #app { margin-left:0; }
+#mask { position:fixed; inset:0; background:rgba(15,23,42,.3); backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); z-index:35; display:none; }
+body.drawer-open #mask { display:block; }
+
+/* ---- 主区 ---- */
+#app { display:none; margin-left:236px; transition:margin-left .25s ease; }
+#app .inner { max-width:1180px; margin:0 auto; padding:22px 20px 60px; }
+header.top { display:flex; align-items:center; gap:12px; margin-bottom:20px; flex-wrap:wrap; }
+header.top h1 { font-size:20px; font-weight:800; letter-spacing:.5px; }
+header.top .spacer { flex:1; }
 section.view { display:none; }
 section.view.active { display:block; }
 .grid.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin-bottom:18px; }
@@ -102,7 +127,7 @@ section.view.active { display:block; }
 .stat .num { font-size:30px; font-weight:800; margin-top:4px; }
 .stat .lbl { font-size:13px; color:var(--text-dim); }
 .stat::after { content:''; position:absolute; right:-22px; top:-22px; width:80px; height:80px; border-radius:50%;
-  background:linear-gradient(120deg,var(--a1),var(--a2)); opacity:.16; }
+  background:linear-gradient(120deg,var(--a1),var(--a2)); opacity:.14; }
 .panel { padding:20px; margin-bottom:18px; }
 .panel h2 { font-size:16px; font-weight:700; margin-bottom:14px; display:flex; align-items:center; gap:8px; }
 .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
@@ -121,7 +146,7 @@ section.view.active { display:block; }
 #login input { width:100%; margin-bottom:14px; text-align:center; }
 
 /* ---- 主题选择器 ---- */
-.theme-pop { position:absolute; top:46px; right:0; padding:12px; z-index:50; width:210px; }
+.theme-pop { position:absolute; top:46px; right:0; padding:12px; z-index:50; width:210px; background:var(--glass-strong); }
 .theme-dot { width:30px; height:30px; border-radius:50%; cursor:pointer; border:2px solid transparent; transition:transform .15s, border .15s; }
 .theme-dot:hover { transform:scale(1.15); }
 .theme-dot.sel { border-color:var(--text); }
@@ -131,8 +156,13 @@ section.view.active { display:block; }
 .t-sunset { background:linear-gradient(120deg,#fb923c,#f43f5e); }
 .t-rose   { background:linear-gradient(120deg,#fb7185,#c084fc); }
 .rel { position:relative; }
-@media (max-width:640px) {
-  nav.tabs button { padding:8px 13px; font-size:13px; }
+
+/* ---- 响应式: 移动端抽屉浮出 ---- */
+@media (max-width:820px) {
+  #drawer { transform:translateX(-100%); box-shadow:0 0 60px rgba(30,50,90,.18); }
+  body.drawer-open #drawer { transform:translateX(0); }
+  #app, body.collapsed #app { margin-left:0; }
+  #app .inner { padding:16px 14px 60px; }
   .stat .num { font-size:24px; }
 }
 </style>
@@ -152,13 +182,38 @@ section.view.active { display:block; }
   </div>
 </div>
 
+<!-- 左侧抽屉(功能分类导航) -->
+<div id="mask" onclick="toggleDrawer()"></div>
+<aside id="drawer">
+  <div class="brand"><span class="logo grad-text">&#9670;</span> Orion Cloud</div>
+
+  <div class="grp">概 览</div>
+  <button class="nav-item active" data-v="dash" onclick="show('dash')"><span class="ico">&#128202;</span> 仪表盘</button>
+
+  <div class="grp">授权管理</div>
+  <button class="nav-item" data-v="lic" onclick="show('lic')"><span class="ico">&#128273;</span> 卡密管理</button>
+
+  <div class="grp">用户管理</div>
+  <button class="nav-item" data-v="usr" onclick="show('usr')"><span class="ico">&#128101;</span> 用户列表</button>
+
+  <div class="grp">运营监控</div>
+  <button class="nav-item" data-v="usage" onclick="show('usage')"><span class="ico">&#128200;</span> 用量统计</button>
+  <button class="nav-item" data-v="audit" onclick="show('audit')"><span class="ico">&#128737;</span> 审计日志</button>
+
+  <div class="foot">
+    <button class="btn ghost" onclick="togglePop(event)" title="配色主题">&#127912; 主题</button>
+    <button class="btn ghost" onclick="doLogout()">退出</button>
+  </div>
+</aside>
+
 <!-- 主界面 -->
 <div id="app">
+ <div class="inner">
   <header class="top">
-    <h1><span class="grad-text">Orion Cloud</span> 管理台</h1>
+    <button class="btn ghost icon" onclick="toggleDrawer()" title="展开/收起导航">&#9776;</button>
+    <h1 id="pageTitle">仪表盘</h1>
     <div class="spacer"></div>
     <div class="rel">
-      <button class="btn ghost" onclick="togglePop(event)" title="主题">🎨 主题</button>
       <div id="themePop" class="theme-pop glass" style="display:none;">
         <div class="dim" style="font-size:12px; margin-bottom:8px;">配色主题</div>
         <div style="display:flex; gap:9px; justify-content:center;">
@@ -168,20 +223,9 @@ section.view.active { display:block; }
           <div class="theme-dot t-sunset" data-t="sunset" onclick="setTheme('sunset')"></div>
           <div class="theme-dot t-rose" data-t="rose" onclick="setTheme('rose')"></div>
         </div>
-        <hr style="border:none; border-top:1px solid var(--border); margin:11px 0;">
-        <button class="btn ghost" style="width:100%; padding:7px;" onclick="toggleMode()">🌙 / ☀ 明暗切换</button>
       </div>
     </div>
-    <button class="btn ghost" onclick="doLogout()">退出</button>
   </header>
-
-  <nav class="tabs glass">
-    <button class="active" data-v="dash" onclick="show('dash')">📊 仪表盘</button>
-    <button data-v="lic" onclick="show('lic')">🔑 卡密</button>
-    <button data-v="usr" onclick="show('usr')">👥 用户</button>
-    <button data-v="usage" onclick="show('usage')">📈 用量</button>
-    <button data-v="audit" onclick="show('audit')">🛡 审计</button>
-  </nav>
 
   <section id="v-dash" class="view active">
     <div class="grid cards">
@@ -192,14 +236,14 @@ section.view.active { display:block; }
       <div class="stat glass"><div class="lbl">今日中继请求</div><div class="num grad-text" id="sUsage">-</div></div>
     </div>
     <div class="panel glass">
-      <h2>📌 概览</h2>
+      <h2>&#128204; 概览</h2>
       <div class="dim" id="dashNote" style="font-size:13.5px; line-height:1.8;">加载中...</div>
     </div>
   </section>
 
   <section id="v-lic" class="view">
     <div class="panel glass">
-      <h2>🔑 生成卡密</h2>
+      <h2>&#128273; 生成卡密</h2>
       <div class="row">
         <select id="gPlan"><option value="trial">试用 trial</option><option value="pro">专业 pro</option><option value="lifetime">永久 lifetime</option></select>
         <input id="gDays" type="number" value="30" min="1" style="width:110px;" title="时长(天)">
@@ -216,7 +260,7 @@ section.view.active { display:block; }
       </div>
     </div>
     <div class="panel glass">
-      <h2>📋 卡密列表</h2>
+      <h2>&#128203; 卡密列表</h2>
       <div class="row">
         <input id="fBatch" placeholder="按批次筛选" style="width:160px;">
         <select id="fStatus"><option value="">全部状态</option><option value="unused">未使用</option><option value="used">已激活</option><option value="revoked">已作废</option></select>
@@ -228,24 +272,25 @@ section.view.active { display:block; }
 
   <section id="v-usr" class="view">
     <div class="panel glass">
-      <h2>👥 用户列表 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadUsers()">刷新</button></h2>
+      <h2>&#128101; 用户列表 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadUsers()">刷新</button></h2>
       <div class="scroll-x"><table id="usrTable"></table></div>
     </div>
   </section>
 
   <section id="v-usage" class="view">
     <div class="panel glass">
-      <h2>📈 用量统计 <span class="dim" style="font-size:12px; font-weight:400;">(每日, UTC+8)</span></h2>
+      <h2>&#128200; 用量统计 <span class="dim" style="font-size:12px; font-weight:400;">(每日, UTC+8)</span></h2>
       <div class="scroll-x"><table id="usageTable"></table></div>
     </div>
   </section>
 
   <section id="v-audit" class="view">
     <div class="panel glass">
-      <h2>🛡 审计日志 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadAudit()">刷新</button></h2>
+      <h2>&#128737; 审计日志 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadAudit()">刷新</button></h2>
       <div class="scroll-x"><table id="auditTable"></table></div>
     </div>
   </section>
+ </div>
 </div>
 <div id="toast"></div>
 
@@ -253,6 +298,7 @@ section.view.active { display:block; }
 // EdgeOne 部署时函数挂在 /api/* 下(前缀 /api); 本地 dev 直接是根路径。
 var APIBASE = (location.pathname.indexOf('/api') === 0 ? '/api' : '') + '/admin';
 var TOKEN = localStorage.getItem('orion_admin_token') || '';
+var VIEW_META = { dash:'仪表盘', lic:'卡密管理', usr:'用户列表', usage:'用量统计', audit:'审计日志' };
 
 function api(path, opts) {
   opts = opts || {};
@@ -276,11 +322,6 @@ function setTheme(t) {
   document.documentElement.setAttribute('data-theme', t);
   localStorage.setItem('orion_admin_theme', t); markTheme(t);
 }
-function toggleMode() {
-  var cur = document.documentElement.getAttribute('data-mode') === 'dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-mode', cur);
-  localStorage.setItem('orion_admin_mode', cur);
-}
 function markTheme(t) {
   var dots = document.querySelectorAll('.theme-dot');
   for (var i = 0; i < dots.length; i++) dots[i].classList.toggle('sel', dots[i].getAttribute('data-t') === t);
@@ -290,6 +331,12 @@ document.addEventListener('click', function(e) {
   var p = document.getElementById('themePop');
   if (p && !p.contains(e.target)) p.style.display = 'none';
 });
+
+// ---------- 抽屉: 桌面折叠 / 移动端浮出 ----------
+function toggleDrawer() {
+  if (window.innerWidth <= 820) document.body.classList.toggle('drawer-open');
+  else document.body.classList.toggle('collapsed');
+}
 
 // ---------- 登录 ----------
 function doLogin() {
@@ -314,10 +361,12 @@ function doLogout(silent) {
 
 // ---------- 视图切换 ----------
 function show(v) {
-  var tabs = document.querySelectorAll('nav.tabs button');
-  for (var i = 0; i < tabs.length; i++) tabs[i].classList.toggle('active', tabs[i].getAttribute('data-v') === v);
+  var items = document.querySelectorAll('.nav-item');
+  for (var i = 0; i < items.length; i++) items[i].classList.toggle('active', items[i].getAttribute('data-v') === v);
   var views = document.querySelectorAll('section.view');
   for (var j = 0; j < views.length; j++) views[j].classList.toggle('active', views[j].id === 'v-' + v);
+  document.getElementById('pageTitle').textContent = VIEW_META[v] || '';
+  if (window.innerWidth <= 820) document.body.classList.remove('drawer-open');
   if (v === 'dash') loadDashboard();
   if (v === 'lic') loadLicenses();
   if (v === 'usr') loadUsers();
@@ -464,8 +513,6 @@ function loadAudit() {
   var t = localStorage.getItem('orion_admin_theme') || 'aurora';
   document.documentElement.setAttribute('data-theme', t);
   markTheme(t);
-  var m = localStorage.getItem('orion_admin_mode') || 'dark';
-  document.documentElement.setAttribute('data-mode', m);
   if (TOKEN) {
     fetch(APIBASE + '/users', {headers: {'Authorization': 'Bearer ' + TOKEN}})
       .then(function(r) { if (r.ok) enterApp(); else doLogout(true); })
