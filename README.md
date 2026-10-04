@@ -15,7 +15,8 @@
 | 设备 | `GET/DELETE /api/auth/devices` | 设备列表/解绑；套餐设备数上限（free=1 / trial=2 / pro=3） |
 | 设备令牌 | `POST /api/auth/device-token` | 长期令牌(`dt_`)，供 orion 的 MCP 配置使用 |
 | 卡密激活 | `POST /api/license/activate` `GET /api/license/status` | 试用/专业/永久三档；到期自动降级 free |
-| 管理台 | `/api/admin/*` | 卡密批量生成(≤500/批)/吊销/查询、用户封禁、用量与审计 |
+| **管理台 Web UI** | `GET /api/admin` | 磨砂液态玻璃单页管理台：仪表盘 / 卡密生成与作废 / 用户封禁 / 用量 / 审计日志，5 套配色主题 + 明暗模式，浏览器打开即用（用 ADMIN_TOKEN 登录） |
+| 管理 API | `/api/admin/*` | 管理台背后的接口：卡密批量生成(≤500/批)/吊销/查询、用户封禁、用量与审计 |
 | 搜索中继 | `GET /api/relay/search?q=` | DuckDuckGo(免Key) / Serper / 博查 三后端可切换 |
 | 抓取中继 | `GET /api/relay/fetch?url=` | SSRF 防护 + 2MB 上限 + 正文抽取 |
 | 云端任务 | `/api/tasks` CRUD + `GET /tasks/results?after=` | Cron 到期由服务端调 LLM 执行，App 打开拉取补跑 |

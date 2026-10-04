@@ -9,6 +9,7 @@ import { taskRoutes } from "./routes/tasks";
 import { updateRoutes } from "./routes/update";
 import { mcpRoutes } from "./routes/mcp";
 import { adminRoutes } from "./routes/admin";
+import { adminHtml } from "./ui/admin_html";
 import { requireAuth } from "./middleware/auth";
 
 const app = new Hono<Env>();
@@ -25,6 +26,15 @@ app.get("/", (c) =>
     service: "orion-backend",
     version: "0.1.0",
     endpoints: ["/auth", "/license", "/relay", "/tasks", "/mcp", "/update", "/admin"],
+  })
+);
+
+// 管理台 UI(单页, 无需鉴权——数据接口全部要求 ADMIN_TOKEN)。
+// 必须先于 app.route("/admin", adminRoutes) 注册, 否则会被管理 API 的
+// 鉴权中间件拦下; adminRoutes 的子路径(/admin/licenses 等)不受影响。
+app.get("/admin", (c) =>
+  c.html(adminHtml(), 200, {
+    "cache-control": "no-store",
   })
 );
 
