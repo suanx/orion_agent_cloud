@@ -62,13 +62,14 @@ button { cursor:pointer; font-family:inherit; }
 .btn.ghost { background:var(--glass-strong); color:var(--text); border:1px solid var(--border); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); }
 .btn.danger { background:linear-gradient(120deg,#fb7185,#e11d48); }
 .btn.icon { padding:8px 13px; font-size:16px; line-height:1; }
-input, select {
+input, select, textarea {
   background:var(--input); border:1px solid var(--border); border-radius:12px;
   padding:9px 13px; color:var(--text); font-size:14px; outline:none; font-family:inherit;
   transition:border .2s, box-shadow .2s;
 }
-input:focus, select:focus { border-color:var(--a1); box-shadow:0 0 0 3px color-mix(in srgb, var(--a1) 25%, transparent); }
+input:focus, select:focus, textarea:focus { border-color:var(--a1); box-shadow:0 0 0 3px color-mix(in srgb, var(--a1) 25%, transparent); }
 select option { color:#172033; }
+textarea { resize:vertical; font-family:inherit; }
 table { width:100%; border-collapse:collapse; font-size:13.5px; }
 th { text-align:left; padding:10px 12px; color:var(--text-dim); font-weight:600; border-bottom:1px solid var(--border); white-space:nowrap; }
 td { padding:10px 12px; border-bottom:1px solid var(--border); word-break:break-all; }
@@ -182,6 +183,7 @@ section.view.active { display:block; }
   <symbol id="i-contrast" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor" stroke="none"/></symbol>
   <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></symbol>
   <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3.5 6h.01"/><path d="M3.5 12h.01"/><path d="M3.5 18h.01"/></symbol>
+  <symbol id="i-mega" viewBox="0 0 24 24"><path d="m3 11 14-6v14L3 13v-2Z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/><path d="M17 9.5a4 4 0 0 1 0 5"/></symbol>
   <symbol id="i-diamond" viewBox="0 0 24 24"><path d="m12 3 8 9-8 9-8-9 8-9Z"/></symbol>
 </svg>
 <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
@@ -210,7 +212,8 @@ section.view.active { display:block; }
   <button class="nav-item active" data-v="dash" onclick="show('dash')"><svg class="ic" aria-hidden="true"><use href="#i-home"></use></svg> 首页</button>
 
   <div class="grp">授权管理</div>
-  <button class="nav-item" data-v="lic" onclick="show('lic')"><svg class="ic" aria-hidden="true"><use href="#i-key"></use></svg> 卡密管理</button>
+  <button class="nav-item" data-v="grant" onclick="show('grant')"><svg class="ic" aria-hidden="true"><use href="#i-key"></use></svg> 账号授权</button>
+  <button class="nav-item" data-v="ann" onclick="show('ann')"><svg class="ic" aria-hidden="true"><use href="#i-mega"></use></svg> 公告管理</button>
 
   <div class="grp">用户管理</div>
   <button class="nav-item" data-v="usr" onclick="show('usr')"><svg class="ic" aria-hidden="true"><use href="#i-users"></use></svg> 用户列表</button>
@@ -250,8 +253,8 @@ section.view.active { display:block; }
     <div class="grid cards">
       <div class="stat glass"><div class="lbl">注册用户</div><div class="num grad-text" id="sUsers">-</div></div>
       <div class="stat glass"><div class="lbl">活跃(未封禁)</div><div class="num grad-text" id="sActive">-</div></div>
-      <div class="stat glass"><div class="lbl">卡密 · 未使用</div><div class="num grad-text" id="sLicU">-</div></div>
-      <div class="stat glass"><div class="lbl">卡密 · 已激活</div><div class="num grad-text" id="sLicB">-</div></div>
+      <div class="stat glass"><div class="lbl">付费账号</div><div class="num grad-text" id="sPro">-</div></div>
+      <div class="stat glass"><div class="lbl">试用账号</div><div class="num grad-text" id="sTrial">-</div></div>
       <div class="stat glass"><div class="lbl">今日中继请求</div><div class="num grad-text" id="sUsage">-</div></div>
     </div>
     <div class="panel glass">
@@ -260,32 +263,14 @@ section.view.active { display:block; }
     </div>
   </section>
 
-  <section id="v-lic" class="view">
+  <section id="v-grant" class="view">
     <div class="panel glass">
-      <h2><svg class="ic" aria-hidden="true"><use href="#i-key"></use></svg> 生成卡密</h2>
-      <div class="row">
-        <select id="gPlan"><option value="trial">试用 trial</option><option value="pro">专业 pro</option><option value="lifetime">永久 lifetime</option></select>
-        <input id="gDays" type="number" value="30" min="1" style="width:110px;" title="时长(天)">
-        <input id="gCount" type="number" value="10" min="1" max="500" style="width:110px;" title="数量">
-        <input id="gBatch" placeholder="批次号(可留空)" style="width:170px;">
-        <button class="btn" onclick="genLicenses()">生成</button>
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-key"></use></svg> 账号授权 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadGrant()">刷新</button></h2>
+      <div class="dim" style="font-size:13px; margin-bottom:10px;">
+        直接为账号设置套餐（卡密已下线）。模式：<b>设置</b> = 从现在起算；<b>顺延</b> = 在现有到期时间上叠加（更高套餐未过期时保留高套餐仅顺延）。
+        free = 撤销授权。
       </div>
-      <div id="genOut" style="display:none;">
-        <div class="row" style="margin-bottom:6px;">
-          <span class="dim" style="font-size:13px;">新生成卡密（点击全选复制）：</span>
-          <button class="btn ghost" style="padding:4px 12px; font-size:12px;" onclick="copyCodes()">复制全部</button>
-        </div>
-        <div id="genCodes" class="mono" style="background:var(--input); border-radius:12px; padding:12px; font-size:13px; line-height:1.9; user-select:all;"></div>
-      </div>
-    </div>
-    <div class="panel glass">
-      <h2><svg class="ic" aria-hidden="true"><use href="#i-list"></use></svg> 卡密列表</h2>
-      <div class="row">
-        <input id="fBatch" placeholder="按批次筛选" style="width:160px;">
-        <select id="fStatus"><option value="">全部状态</option><option value="unused">未使用</option><option value="used">已激活</option><option value="revoked">已作废</option></select>
-        <button class="btn ghost" onclick="loadLicenses()">查询</button>
-      </div>
-      <div class="scroll-x"><table id="licTable"></table></div>
+      <div class="scroll-x"><table id="grantTable"></table></div>
     </div>
   </section>
 
@@ -309,6 +294,29 @@ section.view.active { display:block; }
       <div class="scroll-x"><table id="auditTable"></table></div>
     </div>
   </section>
+
+  <section id="v-ann" class="view">
+    <div class="panel glass">
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-mega"></use></svg> 发布/编辑公告</h2>
+      <div class="row"><input id="annTitle" placeholder="公告标题" style="flex:1; min-width:220px;"></div>
+      <div class="row"><textarea id="annContent" rows="5" placeholder="公告正文（App 内弹窗展示）" style="width:100%; min-width:220px;"></textarea></div>
+      <div class="row">
+        <span class="dim" style="font-size:13px;">版本范围（留空 = 全部版本）：</span>
+        <input id="annMin" placeholder="最低版本 如 0.2.33" style="width:170px;">
+        <input id="annMax" placeholder="最高版本 如 0.2.40" style="width:170px;">
+        <label style="font-size:13px; display:flex; align-items:center; gap:5px;"><input type="checkbox" id="annEnabled" checked style="width:auto;"> 启用</label>
+      </div>
+      <div class="row">
+        <button class="btn" onclick="saveAnnouncement()">发布</button>
+        <button class="btn ghost" onclick="resetAnnForm()">清空表单</button>
+        <span class="dim" id="annEditing" style="font-size:12px;"></span>
+      </div>
+    </div>
+    <div class="panel glass">
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-list"></use></svg> 公告列表 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadAnnouncements()">刷新</button></h2>
+      <div class="scroll-x"><table id="annTable"></table></div>
+    </div>
+  </section>
  </div>
 </div>
 <div id="toast"></div>
@@ -317,7 +325,7 @@ section.view.active { display:block; }
 // EdgeOne 部署时函数挂在 /api/* 下(前缀 /api); 本地 dev 直接是根路径。
 var APIBASE = (location.pathname.indexOf('/api') === 0 ? '/api' : '') + '/admin';
 var TOKEN = localStorage.getItem('orion_admin_token') || '';
-var VIEW_META = { dash:'首页', lic:'卡密管理', usr:'用户列表', usage:'用量统计', audit:'审计日志' };
+var VIEW_META = { dash:'首页', grant:'账号授权', ann:'公告管理', usr:'用户列表', usage:'用量统计', audit:'审计日志' };
 
 function api(path, opts) {
   opts = opts || {};
@@ -387,7 +395,8 @@ function show(v) {
   document.getElementById('pageTitle').textContent = VIEW_META[v] || '';
   if (window.innerWidth <= 820) document.body.classList.remove('drawer-open');
   if (v === 'dash') loadDashboard();
-  if (v === 'lic') loadLicenses();
+  if (v === 'grant') loadGrant();
+  if (v === 'ann') loadAnnouncements();
   if (v === 'usr') loadUsers();
   if (v === 'usage') loadUsage();
   if (v === 'audit') loadAudit();
@@ -400,81 +409,139 @@ function enterApp() {
 
 // ---------- 首页 ----------
 function loadDashboard() {
-  Promise.all([api('/users'), api('/licenses'), api('/usage')]).then(function(rs) {
-    var users = rs[0].users || [], lics = rs[1].licenses || [], usage = rs[2].usage || [];
-    var unused = 0, bound = 0, banned = 0;
-    for (var i = 0; i < lics.length; i++) {
-      if (lics[i].status === 'unused') unused++;
-      if (lics[i].status === 'used') bound++;
-    }
+  Promise.all([api('/users'), api('/usage')]).then(function(rs) {
+    var users = rs[0].users || [], usage = rs[1].usage || [];
+    var banned = 0;
     for (var j = 0; j < users.length; j++) if (users[j].status === 'banned') banned++;
     var today = new Date(Date.now() + 8*3600*1000).toISOString().slice(0,10);
     var totalReq = 0;
     for (var k = 0; k < usage.length; k++) if (usage[k].date === today) totalReq += Number(usage[k].count) || 0;
-    document.getElementById('sUsers').textContent = users.length;
-    document.getElementById('sActive').textContent = users.length - banned;
-    document.getElementById('sLicU').textContent = unused;
-    document.getElementById('sLicB').textContent = bound;
-    document.getElementById('sUsage').textContent = totalReq;
     var pro = 0, trial = 0;
     for (var m = 0; m < users.length; m++) {
       if (users[m].plan === 'pro' || users[m].plan === 'lifetime') pro++;
       if (users[m].plan === 'trial') trial++;
     }
+    document.getElementById('sUsers').textContent = users.length;
+    document.getElementById('sActive').textContent = users.length - banned;
+    document.getElementById('sPro').textContent = pro;
+    document.getElementById('sTrial').textContent = trial;
+    document.getElementById('sUsage').textContent = totalReq;
     document.getElementById('dashNote').innerHTML =
       '共 <b>' + users.length + '</b> 位用户：付费 ' + pro + ' · 试用 ' + trial + ' · 封禁 ' + banned +
-      '<br>卡密：未使用 ' + unused + ' · 已激活 ' + bound + '<br>今日中继请求：' + totalReq + ' 次（UTC+8 ' + today + '）';
+      '<br>授权方式：管理台直接为账号设置套餐（卡密已下线）<br>今日中继请求：' + totalReq + ' 次（UTC+8 ' + today + '）';
   }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
 }
 
-// ---------- 卡密 ----------
-var lastCodes = [];
-function genLicenses() {
-  var body = {
-    plan: document.getElementById('gPlan').value,
-    durationDays: Number(document.getElementById('gDays').value) || 0,
-    count: Number(document.getElementById('gCount').value) || 1,
-    batch: document.getElementById('gBatch').value.trim()
-  };
-  api('/licenses/generate', {method:'POST', body: body}).then(function(r) {
-    lastCodes = r.codes || [];
-    document.getElementById('genOut').style.display = 'block';
-    document.getElementById('genCodes').textContent = lastCodes.join('\\n');
-    toast('已生成 ' + lastCodes.length + ' 张 ' + r.plan + ' 卡密');
-    loadLicenses();
-  }).catch(function(e) { toast('生成失败: ' + e.message); });
-}
-function copyCodes() {
-  var text = lastCodes.join('\\n');
-  if (navigator.clipboard) navigator.clipboard.writeText(text).then(function(){ toast('已复制 ' + lastCodes.length + ' 张'); });
-  else toast('浏览器不支持一键复制');
-}
-function loadLicenses() {
-  var batch = document.getElementById('fBatch').value.trim();
-  var status = document.getElementById('fStatus').value;
-  var q = '?'; if (batch) q += 'batch=' + encodeURIComponent(batch) + '&'; if (status) q += 'status=' + status;
-  api('/licenses' + q).then(function(r) {
-    var rows = r.licenses || [];
-    var html = '<tr><th>卡密</th><th>套餐</th><th>状态</th><th>批次</th><th>绑定</th><th>创建</th><th></th></tr>';
-    if (!rows.length) html += '<tr><td colspan="7" class="empty">无记录</td></tr>';
+// ---------- 账号授权 ----------
+function loadGrant() {
+  api('/users').then(function(r) {
+    var rows = r.users || [];
+    var html = '<tr><th>邮箱</th><th>当前套餐</th><th>到期</th><th>授权操作（套餐 / 天数 / 模式）</th><th></th></tr>';
+    if (!rows.length) html += '<tr><td colspan="5" class="empty">无用户</td></tr>';
     for (var i = 0; i < rows.length; i++) {
-      var l = rows[i];
-      html += '<tr><td class="mono">' + esc(l.code) + '</td>'
-        + '<td>' + esc(l.plan) + (l.duration_days ? ' / ' + l.duration_days + '天' : '') + '</td>'
-        + '<td><span class="badge ' + esc(l.status) + '">' + esc(l.status) + '</span></td>'
-        + '<td>' + esc(l.batch || '—') + '</td>'
-        + '<td class="dim">' + (l.bound_user_id ? esc(String(l.bound_user_id).slice(0,12)) + '…' : '—') + '</td>'
-        + '<td class="dim">' + fmtTime(l.created_at) + '</td>'
-        + '<td>' + (l.status !== 'revoked' ? '<button class="btn danger" style="padding:4px 12px; font-size:12px;" onclick="revoke(\\'' + esc(l.code) + '\\')">作废</button>' : '') + '</td></tr>';
+      var u = rows[i];
+      var uid = esc(u.id);
+      var exp = u.plan_expires_at ? new Date(Number(u.plan_expires_at)).toLocaleString('zh-CN', {hour12:false}) : (u.plan === 'lifetime' ? '永久' : '—');
+      html += '<tr><td>' + esc(u.email) + '</td>'
+        + '<td><span class="badge used">' + esc(u.plan) + '</span></td><td class="dim">' + exp + '</td>'
+        + '<td><div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">'
+        + '<select id="gp-' + uid + '" style="width:110px; padding:6px 8px; font-size:13px;">'
+        + '<option value="free">free 撤销</option><option value="trial">trial 试用</option><option value="pro">pro 专业</option><option value="lifetime">lifetime 永久</option></select>'
+        + '<input id="gd-' + uid + '" type="number" value="30" min="1" style="width:74px; padding:6px 8px; font-size:13px;" title="天数">'
+        + '<select id="gm-' + uid + '" style="width:88px; padding:6px 8px; font-size:13px;">'
+        + '<option value="set">设置</option><option value="extend">顺延</option></select>'
+        + '<button class="btn" style="padding:6px 14px; font-size:12px;" onclick="setPlan(\'' + uid + '\')">应用</button>'
+        + '</div></td>'
+        + '<td><button class="btn ' + (u.status === 'banned' ? '' : 'danger') + '" style="padding:4px 12px; font-size:12px;" onclick="setBan(\'' + uid + '\',' + (u.status === 'banned') + ')">' + (u.status === 'banned' ? '解封' : '封禁') + '</button></td></tr>';
     }
-    document.getElementById('licTable').innerHTML = html;
+    document.getElementById('grantTable').innerHTML = html;
   }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
 }
-function revoke(code) {
-  if (!confirm('确定作废 ' + code + '？已激活的不受影响，未激活的将无法使用。')) return;
-  api('/licenses/' + encodeURIComponent(code) + '/revoke', {method:'POST'}).then(function() {
-    toast('已作废'); loadLicenses();
-  }).catch(function(e) { toast('作废失败: ' + e.message); });
+function setPlan(id) {
+  var body = {
+    plan: document.getElementById('gp-' + id).value,
+    durationDays: Number(document.getElementById('gd-' + id).value) || 0,
+    mode: document.getElementById('gm-' + id).value
+  };
+  api('/users/' + encodeURIComponent(id) + '/plan', {method:'POST', body: body}).then(function(r) {
+    toast(r.message || '已更新'); loadGrant();
+  }).catch(function(e) { toast('授权失败: ' + e.message); });
+}
+
+// ---------- 公告 ----------
+var editingAnnId = '';
+function loadAnnouncements() {
+  api('/announcements').then(function(r) {
+    var rows = r.announcements || [];
+    var html = '<tr><th>标题</th><th>内容</th><th>版本范围</th><th>状态</th><th>更新</th><th></th></tr>';
+    if (!rows.length) html += '<tr><td colspan="6" class="empty">暂无公告</td></tr>';
+    for (var i = 0; i < rows.length; i++) {
+      var a = rows[i];
+      var range = (a.min_version ? '≥' + a.min_version : '') + (a.max_version ? ' ≤' + a.max_version : '') || '全部版本';
+      html += '<tr><td><b>' + esc(a.title) + '</b></td><td class="dim" style="max-width:260px;">' + esc(String(a.content).slice(0, 60)) + (String(a.content).length > 60 ? '…' : '') + '</td>'
+        + '<td class="dim">' + esc(range) + '</td>'
+        + '<td><span class="badge ' + (a.enabled ? 'unused' : 'revoked') + '">' + (a.enabled ? '启用中' : '已停用') + '</span></td>'
+        + '<td class="dim">' + fmtTime(a.updated_at) + '</td>'
+        + '<td style="white-space:nowrap;">'
+        + '<button class="btn ghost" style="padding:4px 10px; font-size:12px;" onclick="editAnnouncement(\'' + esc(a.id) + '\')">编辑</button> '
+        + '<button class="btn ghost" style="padding:4px 10px; font-size:12px;" onclick="toggleAnnouncement(\'' + esc(a.id) + '\')">' + (a.enabled ? '停用' : '启用') + '</button> '
+        + '<button class="btn danger" style="padding:4px 10px; font-size:12px;" onclick="deleteAnnouncement(\'' + esc(a.id) + '\')">删除</button></td></tr>';
+    }
+    document.getElementById('annTable').innerHTML = html;
+  }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
+}
+function saveAnnouncement() {
+  var body = {
+    title: document.getElementById('annTitle').value.trim(),
+    content: document.getElementById('annContent').value.trim(),
+    minVersion: document.getElementById('annMin').value.trim(),
+    maxVersion: document.getElementById('annMax').value.trim(),
+    enabled: document.getElementById('annEnabled').checked
+  };
+  if (!body.title || !body.content) { toast('标题与正文不能为空'); return; }
+  if (editingAnnId) body.id = editingAnnId;
+  api('/announcements', {method:'POST', body: body}).then(function() {
+    toast(editingAnnId ? '公告已更新' : '公告已发布');
+    resetAnnForm(); loadAnnouncements();
+  }).catch(function(e) { toast('保存失败: ' + e.message); });
+}
+function editAnnouncement(id) {
+  api('/announcements').then(function(r) {
+    var rows = r.announcements || [];
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].id === id) {
+        editingAnnId = id;
+        document.getElementById('annTitle').value = rows[i].title;
+        document.getElementById('annContent').value = rows[i].content;
+        document.getElementById('annMin').value = rows[i].min_version || '';
+        document.getElementById('annMax').value = rows[i].max_version || '';
+        document.getElementById('annEnabled').checked = !!rows[i].enabled;
+        document.getElementById('annEditing').textContent = '正在编辑: ' + id;
+        window.scrollTo(0, 0);
+        return;
+      }
+    }
+  }).catch(function(e) { toast('加载失败: ' + e.message); });
+}
+function resetAnnForm() {
+  editingAnnId = '';
+  document.getElementById('annTitle').value = '';
+  document.getElementById('annContent').value = '';
+  document.getElementById('annMin').value = '';
+  document.getElementById('annMax').value = '';
+  document.getElementById('annEnabled').checked = true;
+  document.getElementById('annEditing').textContent = '';
+}
+function toggleAnnouncement(id) {
+  api('/announcements/' + encodeURIComponent(id) + '/toggle', {method:'POST'}).then(function() {
+    toast('已切换状态'); loadAnnouncements();
+  }).catch(function(e) { toast('操作失败: ' + e.message); });
+}
+function deleteAnnouncement(id) {
+  if (!confirm('确定删除该公告？')) return;
+  api('/announcements/' + encodeURIComponent(id), {method:'DELETE'}).then(function() {
+    toast('已删除'); loadAnnouncements();
+  }).catch(function(e) { toast('删除失败: ' + e.message); });
 }
 
 // ---------- 用户 ----------

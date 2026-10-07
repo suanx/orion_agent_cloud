@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_user   ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_device ON sessions(device_id);
 
+-- [已废弃] 卡密授权已改为账号授权(admin 直接设置 plan), 表保留供历史数据查询
 CREATE TABLE IF NOT EXISTS licenses (
   code           TEXT PRIMARY KEY,               -- ORION-XXXX-XXXX-XXXX-XXXX
   plan           TEXT NOT NULL,                  -- trial | pro | lifetime
@@ -151,3 +152,16 @@ CREATE TABLE IF NOT EXISTS audit_log (
   at      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id, at);
+
+-- ============ 弹窗公告 ============
+
+CREATE TABLE IF NOT EXISTS announcements (
+  id          TEXT PRIMARY KEY,                  -- a_<uuid>
+  title       TEXT NOT NULL,
+  content     TEXT NOT NULL,
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  min_version TEXT NOT NULL DEFAULT '',           -- 空 = 不限; 含端点(<=)
+  max_version TEXT NOT NULL DEFAULT '',           -- 空 = 不限; 含端点(>=)
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);

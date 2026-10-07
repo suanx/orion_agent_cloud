@@ -30,13 +30,17 @@ updateRoutes.get("/check", async (c) => {
 
   const updateAvailable = isNewer(latest, current);
   const minSupported = env.UPDATE_MIN_VERSION ?? "0.0.0";
+  // 强制更新开关: UPDATE_FORCE_UPDATE='true' 时本次更新为强更;
+  // 低于 minSupported 的版本无论如何都强更(兜底)。
+  const forceFlag = env.UPDATE_FORCE_UPDATE === "true";
+  const forceUpdate = updateAvailable && (forceFlag || isNewer(minSupported, current));
   return c.json({
     platform,
     supported: true,
     latest,
     current,
     minSupported,
-    forceUpdate: isNewer(minSupported, current),
+    forceUpdate,
     updateAvailable,
     notes: env.UPDATE_NOTES ?? "",
     apkUrl: env.UPDATE_APK_URL ?? "",

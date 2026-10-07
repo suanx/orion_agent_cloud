@@ -18,6 +18,7 @@ export interface Bindings {
 
   UPDATE_LATEST_VERSION?: string;
   UPDATE_MIN_VERSION?: string;
+  UPDATE_FORCE_UPDATE?: string; // 'true' 时本次更新为强制更新(默认普通更新)
   UPDATE_NOTES?: string;
   UPDATE_APK_URL?: string;
 

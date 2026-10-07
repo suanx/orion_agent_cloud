@@ -7,6 +7,7 @@ import { licenseRoutes } from "./routes/license";
 import { relayRoutes } from "./routes/relay";
 import { taskRoutes } from "./routes/tasks";
 import { updateRoutes } from "./routes/update";
+import { announcementRoutes } from "./routes/announcement";
 import { mcpRoutes } from "./routes/mcp";
 import { adminRoutes } from "./routes/admin";
 import { adminHtml } from "./ui/admin_html";
@@ -25,7 +26,7 @@ app.get("/", (c) =>
   c.json({
     service: "orion-backend",
     version: "0.1.0",
-    endpoints: ["/auth", "/license", "/relay", "/tasks", "/mcp", "/update", "/admin"],
+    endpoints: ["/auth", "/license", "/relay", "/tasks", "/mcp", "/update", "/announcement", "/admin"],
   })
 );
 
@@ -43,6 +44,7 @@ app.route("/license", licenseRoutes);
 app.route("/relay", relayRoutes);
 app.route("/tasks", taskRoutes);
 app.route("/update", updateRoutes);
+app.route("/announcement", announcementRoutes);
 app.route("/mcp", mcpRoutes);
 app.route("/admin", adminRoutes);
 

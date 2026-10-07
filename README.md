@@ -14,22 +14,25 @@
 | 账号 | `POST /api/auth/register` `login` `refresh` `logout` | JWT(2h) + Refresh Token(30d，一次性轮换+复用检测) |
 | 设备 | `GET/DELETE /api/auth/devices` | 设备列表/解绑；套餐设备数上限（free=1 / trial=2 / pro=3） |
 | 设备令牌 | `POST /api/auth/device-token` | 长期令牌(`dt_`)，供 orion 的 MCP 配置使用 |
-| 卡密激活 | `POST /api/license/activate` `GET /api/license/status` | 试用/专业/永久三档；到期自动降级 free |
-| **管理台 Web UI** | `GET /api/admin` | 磨砂液态玻璃单页管理台：仪表盘 / 卡密生成与作废 / 用户封禁 / 用量 / 审计日志，5 套配色主题 + 明暗模式，浏览器打开即用（用 ADMIN_TOKEN 登录） |
-| 管理 API | `/api/admin/*` | 管理台背后的接口：卡密批量生成(≤500/批)/吊销/查询、用户封禁、用量与审计 |
+| 账号授权 | `GET /api/license/status` | 管理台直接为账号设置套餐（free/trial/pro/lifetime）；到期自动降级 free。卡密已下线 |
+| **管理台 Web UI** | `GET /api/admin` | 磨砂液态玻璃单页管理台：仪表盘 / 账号授权（直接设置套餐）/ 用户封禁 / 公告管理 / 用量 / 审计日志，5 套配色主题 + 明暗模式，浏览器打开即用（用 ADMIN_TOKEN 登录） |
+| 管理 API | `/api/admin/*` | 管理台背后的接口：账号授权、用户封禁、公告管理、用量与审计 |
 | 搜索中继 | `GET /api/relay/search?q=` | DuckDuckGo(免Key) / Serper / 博查 三后端可切换 |
 | 抓取中继 | `GET /api/relay/fetch?url=` | SSRF 防护 + 2MB 上限 + 正文抽取 |
 | 云端任务 | `/api/tasks` CRUD + `GET /tasks/results?after=` | Cron 到期由服务端调 LLM 执行，App 打开拉取补跑 |
 | Cron 入口 | `POST /api/tasks/run-due` | 管理员令牌，接 EdgeOne Cron Trigger |
 | MCP 服务 | `POST /api/mcp` | JSON-RPC 2.0：cloud_search / cloud_fetch / cloud_schedule_task / cloud_list_tasks |
-| 更新分发 | `GET /api/update/check` | 版本清单 + 强更判断 + APK 地址 |
+| 更新分发 | `GET /api/update/check` | 版本清单 + 强更/普通更新可选（`UPDATE_FORCE_UPDATE`）+ APK 地址 |
+| 弹窗公告 | `GET /api/announcement` | 当前启用的公告（支持版本范围），管理台发布/编辑/停用 |
 | 健康检查 | `GET /api/health` | 鉴权 + 数据库全链路验证 |
 
 **套餐配额**（每日，UTC+8）：free 搜索/抓取 20 次、云端任务 1 个；trial 100 次 / 5 个；
 pro 与 lifetime 500 次 / 20 个。可用 `PLAN_LIMITS_OVERRIDE` 环境变量覆盖（JSON）。
 
-**卡密激活规则**：lifetime 覆盖一切（永久）；同级未过期顺延；已过期从激活日起算；
-高套餐未过期时激活低级卡密，保留高套餐到期时间再顺延。
+**账号授权规则**（管理台「账号授权」页直接设置，卡密已下线）：
+- 模式「设置」：从当前时间起算；「顺延」：在现有到期时间上叠加
+- lifetime 覆盖一切（永久）；更高套餐未过期时授权低级套餐，保留高套餐到期时间再顺延
+- 到期自动降级 free；free = 撤销授权
 
 ---
 
@@ -85,7 +88,7 @@ npm run db:migrate
    | `SEARCH_PROVIDER` | 可选 | `duckduckgo`(默认) / `serper` / `bocha` |
    | `SERPER_API_KEY` / `BOCHA_API_KEY` | 可选 | 对应搜索后端的 Key |
    | `CLOUD_LLM_BASE_URL` 等 3 项 | 可选 | 云端定时任务用的 OpenAI 兼容端点 |
-   | `UPDATE_LATEST_VERSION` 等 3 项 | 可选 | 应用内检查更新用 |
+   | `UPDATE_LATEST_VERSION` 等 4 项 | 可选 | 应用内检查更新用（`UPDATE_FORCE_UPDATE=true` 本次更新强制） |
    | `PLAN_LIMITS_OVERRIDE` | 可选 | JSON，覆盖套餐配额 |
 
 4. 部署完成后会得到 `https://xxx.edgeone.app` 形式的域名
@@ -139,7 +142,7 @@ JWT_SECRET=dev-secret-0123456789abcdef0123456789abcdef \
 ADMIN_TOKEN=dev-admin \
 npx tsx scripts/dev.mjs        # http://127.0.0.1:8787
 
-npm test        # 34 个单元测试
+npm test        # 单元测试
 npm run typecheck
 ```
 
