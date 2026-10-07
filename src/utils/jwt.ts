@@ -21,12 +21,22 @@ function b64urlEncode(bytes: Uint8Array): string {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function b64urlDecode(input: string): Uint8Array {
-  const pad = input.length % 4 === 0 ? "" : "=".repeat(4 - (input.length % 4));
-  const bin = atob(input.replace(/-/g, "+").replace(/_/g, "/") + pad);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
+/**
+ * base64url 解码。输入非法（长度 %4==1、含非法字符等）时 atob 会抛
+ * DOMException——畸形 token 必须按 401 处理而不是 500（本地部署实测：
+ * "fake.jwt.token" 直接把 verifyJwt 炸成未处理异常），所以这里吞掉
+ * 异常返回 null，由调用方按 malformed 处理。
+ */
+function b64urlDecode(input: string): Uint8Array | null {
+  try {
+    const pad = input.length % 4 === 0 ? "" : "=".repeat(4 - (input.length % 4));
+    const bin = atob(input.replace(/-/g, "+").replace(/_/g, "/") + pad);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  } catch {
+    return null;
+  }
 }
 
 async function hmacKey(secret: string): Promise<CryptoKey> {
@@ -61,6 +71,7 @@ export async function verifyJwt(token: string, secret: string): Promise<VerifyRe
   const [header, body, sig] = parts;
   const key = await hmacKey(secret);
   const sigBytes = b64urlDecode(sig);
+  if (!sigBytes) return { ok: false, reason: "malformed" };
   const valid = await crypto.subtle.verify(
     "HMAC",
     key,
@@ -70,7 +81,9 @@ export async function verifyJwt(token: string, secret: string): Promise<VerifyRe
   if (!valid) return { ok: false, reason: "bad_signature" };
   let payload: JwtPayload;
   try {
-    payload = JSON.parse(new TextDecoder().decode(b64urlDecode(body)));
+    const bodyBytes = b64urlDecode(body);
+    if (!bodyBytes) return { ok: false, reason: "malformed" };
+    payload = JSON.parse(new TextDecoder().decode(bodyBytes));
   } catch {
     return { ok: false, reason: "malformed" };
   }

@@ -22,7 +22,10 @@ adminRoutes.get("/users", async (c) => {
 });
 
 // ---- POST /admin/users/:id/ban | unban ----
-adminRoutes.post("/users/:id/:action(ban|unban)", async (c) => {
+// 注意: 必须用 Hono v4 的 {a|b} 正则参数语法——旧式 :action(ban|unban) 在 v4
+// 中退化为匹配任意段的普通参数, 会把后面注册的 /users/:id/plan 整个遮蔽掉
+// （本地部署实测: 授权请求全落进 unban 分支, 返回 {"ok":true} 却不生效）
+adminRoutes.post("/users/:id/:action{ban|unban}", async (c) => {
   const id = c.req.param("id");
   const ban = c.req.param("action") === "ban";
   const db = c.get("db");

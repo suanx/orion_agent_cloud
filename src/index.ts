@@ -13,7 +13,11 @@ import { adminRoutes } from "./routes/admin";
 import { adminHtml } from "./ui/admin_html";
 import { requireAuth } from "./middleware/auth";
 
-const app = new Hono<Env>();
+// 全部路由挂在 /api 前缀下：EdgeOne 函数文件是 functions/api/[[route]].ts，
+// 只有 /api/* 会进入函数且带着前缀原样到达这里——此前路由挂在根路径，
+// /api/auth/* 等全部 404（云端功能在线上从未真正通过，被 App 的静默降级掩盖，
+// 2026-10-08 本地部署实测复现后修复）。
+const app = new Hono<Env>().basePath("/api");
 
 // 每请求新建 Turso HTTP 客户端
 app.use("*", async (c, next) => {
@@ -26,13 +30,13 @@ app.get("/", (c) =>
   c.json({
     service: "orion-backend",
     version: "0.1.0",
-    endpoints: ["/auth", "/license", "/relay", "/tasks", "/mcp", "/update", "/announcement", "/admin"],
+    endpoints: ["/api/auth", "/api/license", "/api/relay", "/api/tasks", "/api/mcp", "/api/update", "/api/announcement", "/api/admin"],
   })
 );
 
 // 管理台 UI(单页, 无需鉴权——数据接口全部要求 ADMIN_TOKEN)。
-// 必须先于 app.route("/admin", adminRoutes) 注册, 否则会被管理 API 的
-// 鉴权中间件拦下; adminRoutes 的子路径(/admin/licenses 等)不受影响。
+// 必须先于 adminRoutes 注册, 否则会被管理 API 的鉴权中间件拦下;
+// adminRoutes 的子路径(/api/admin/users 等)不受影响。
 app.get("/admin", (c) =>
   c.html(adminHtml(), 200, {
     "cache-control": "no-store",

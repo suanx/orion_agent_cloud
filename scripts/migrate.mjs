@@ -32,7 +32,10 @@ if (!token && !url.startsWith("file:")) {
 const schema = readFileSync("src/db/schema.sql", "utf8");
 // 剥离行注释与行尾注释(注释里可能含分号, 会破坏按 ; 切分), 再按 ; 分割
 // (本 schema 的字符串字面量中不含 "--", 安全)
+// 注意: JS 的 "." 不匹配 \r——CRLF 行上 /--.*$/ 会失配导致注释里的 ";" 漏剥
+// （schema 曾被 Windows 文本模式整文件转成 CRLF 而引爆），这里归一化后再剥离
 const cleaned = schema
+  .replace(/\r\n/g, "\n")
   .split("\n")
   .map((line) => line.replace(/--.*$/, ""))
   .join("\n");
