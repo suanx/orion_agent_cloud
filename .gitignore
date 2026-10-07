@@ -9,3 +9,4 @@ local.db
 .env.local
 local-dev.db
 .dev/
+local-dev*.db
