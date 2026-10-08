@@ -162,6 +162,107 @@ section.view.active { display:block; }
 .t-rose   { background:linear-gradient(120deg,#fb7185,#c084fc); }
 .rel { position:relative; }
 
+/* ============================================================
+   布局优化（2026-10-09）
+   目标：信息密度分层、主次分明、宽屏不浪费、窄屏不拥挤。
+   做法是纯 CSS 增量覆盖，不动既有类名，避免牵动全部视图。
+   ============================================================ */
+
+/* 1) 内容区留白与最大宽度 —— 原 1180px 在 27" 屏上右侧大片空白。
+      放宽到 1440px 并加大行距，长列表滚动时眼睛不容易串行。 */
+#app .inner { max-width:1440px; padding:26px 28px 72px; }
+
+/* 2) 页头：加一条细分隔与下边距，标题与内容的层次更清楚。
+      sticky 让切换视图时标题常驻，长页面下不至于迷路。 */
+header.top {
+  position:sticky; top:0; z-index:20;
+  padding:12px 0 14px; margin-bottom:22px;
+  background:linear-gradient(180deg, var(--glass-strong) 72%, transparent);
+  backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+}
+header.top h1 { font-size:21px; letter-spacing:.2px; }
+header.top::after {
+  content:''; display:block; flex-basis:100%; height:1px;
+  margin-top:12px;
+  background:linear-gradient(90deg, var(--border), transparent 70%);
+}
+
+/* 3) 统计卡片：数字更醒目，加一条顶部渐变强调线做视觉锚点。
+      minmax 从 200 降到 176，宽屏能排下更多列而不显拥挤。 */
+.grid.cards { grid-template-columns:repeat(auto-fit,minmax(176px,1fr)); gap:16px; margin-bottom:22px; }
+.stat { padding:16px 18px 18px; border-radius:16px; }
+.stat::before {
+  content:''; position:absolute; left:0; right:0; top:0; height:3px;
+  background:linear-gradient(90deg,var(--a1),var(--a2)); opacity:.85;
+}
+.stat .num { font-size:32px; font-weight:800; margin-top:2px; letter-spacing:-.5px; line-height:1.15; }
+.stat .lbl { font-size:12.5px; letter-spacing:.3px; }
+
+/* 4) 面板：标题与内容之间加一条淡分隔，标题不再「贴」着表格。
+      hover 时极轻微上浮，长列表面板之间有呼吸感。 */
+.panel { padding:0; margin-bottom:20px; border-radius:18px; overflow:hidden; transition:box-shadow .2s, transform .2s; }
+.panel:hover { box-shadow:0 10px 34px rgba(30,50,90,.09); }
+.panel h2 { margin:0; padding:15px 20px 13px; border-bottom:1px solid var(--border); font-size:15.5px; }
+.panel > .row, .panel > .scroll-x, .panel > .empty { margin-left:20px; margin-right:20px; }
+.panel > .row:first-of-type { margin-top:16px; }
+.panel > .scroll-x:last-child, .panel > .empty:last-child { margin-bottom:18px; }
+
+/* 5) 表格：隔行淡底 + 行高收敛，一屏能看更多行。
+      first/last-child 竖向 padding 收到 0，避免外层 margin 叠加后
+      出现「表格离面板边缘有一段空白」的割裂感。 */
+table { font-size:13.5px; }
+th { padding:11px 14px; font-size:12.5px; letter-spacing:.4px; position:sticky; top:0;
+     background:var(--glass-strong); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); z-index:1; }
+td { padding:9px 14px; }
+tbody tr:nth-child(even) td { background:color-mix(in srgb, var(--text) 3%, transparent); }
+tbody tr:hover td { background:color-mix(in srgb, var(--a1) 8%, transparent); }
+.scroll-x { border-radius:0; max-height:none; }
+.scroll-x table tr:last-child td { border-bottom:none; }
+
+/* 6) 表单行：label 与控件之间留固定间距，控件不再挤在一起 */
+.row { gap:12px; margin-bottom:14px; }
+.row > input, .row > select, .row > textarea { flex:1; min-width:150px; }
+
+/* 7) 双列面板（宽屏并排，窄屏自动回落单列）。
+      仪表盘的「用量趋势」与「公告」这类面板放一起更紧凑。 */
+@media (min-width:1100px) {
+  .grid.duo { display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start; }
+  .grid.duo > .panel { margin-bottom:0; }
+}
+
+/* 8) 危险操作按钮：小一号、描边为主，不与主操作抢视觉权重 */
+.btn.danger-soft {
+  background:color-mix(in srgb, var(--danger) 10%, transparent);
+  color:var(--danger); border:1px solid color-mix(in srgb, var(--danger) 32%, transparent);
+  padding:4px 11px; font-size:12px; border-radius:9px;
+}
+.btn.danger-soft:hover { background:color-mix(in srgb, var(--danger) 18%, transparent); box-shadow:none; transform:none; }
+
+/* 9) 二次确认弹窗（删除用户等破坏性操作） */
+#confirm { display:none; position:fixed; inset:0; z-index:120;
+  align-items:center; justify-content:center; padding:20px;
+  background:rgba(15,23,42,.42); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); }
+#confirm.show { display:flex; }
+#confirm .box { width:min(440px,92vw); padding:26px 24px 20px; border-radius:20px; }
+#confirm h3 { font-size:17px; font-weight:800; margin:0 0 10px; display:flex; align-items:center; gap:8px; }
+#confirm p { font-size:13.5px; line-height:1.6; color:var(--text-dim); margin:0 0 12px; }
+#confirm .impact {
+  max-height:190px; overflow:auto; margin-bottom:14px; padding:12px 14px; border-radius:12px;
+  background:color-mix(in srgb, var(--text) 5%, transparent);
+  font-size:13px; line-height:1.75;
+}
+#confirm .impact b { font-weight:700; }
+#confirm .impact .n { float:right; color:var(--danger); font-weight:700; }
+#confirm .acts { display:flex; gap:10px; justify-content:flex-end; }
+
+/* 10) 窄屏微调 */
+@media (max-width:820px) {
+  #app .inner { padding:18px 14px 60px; }
+  .grid.duo { grid-template-columns:1fr; }
+  header.top { position:static; backdrop-filter:none; -webkit-backdrop-filter:none; }
+  .stat::before { height:2px; }
+}
+
 /* ---- 响应式: 移动端抽屉浮出 ---- */
 @media (max-width:820px) {
   #drawer { transform:translateX(-100%); box-shadow:0 0 60px rgba(30,50,90,.18); }
@@ -388,6 +489,19 @@ section.view.active { display:block; }
  </div>
 </div>
 <div id="toast"></div>
+
+<!-- 破坏性操作二次确认（删除用户等）。内容由 confirmDeleteUser 填。 -->
+<div id="confirm">
+  <div class="box glass">
+    <h3><svg class="ic" aria-hidden="true" style="width:19px;height:19px;vertical-align:-4px;"><use href="#i-shield"></use></svg><span id="cfTitle">确认删除</span></h3>
+    <p id="cfDesc"></p>
+    <div class="impact" id="cfImpact"></div>
+    <div class="acts">
+      <button class="btn ghost" id="cfCancel">取消</button>
+      <button class="btn danger" id="cfOk">确认删除</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // EdgeOne 部署时函数挂在 /api/* 下(前缀 /api); 本地 dev 直接是根路径。
@@ -817,7 +931,7 @@ function deleteAnnouncement(id) {
 function loadUsers() {
   api('/users').then(function(r) {
     var rows = r.users || [];
-    var html = '<tr><th>邮箱</th><th>套餐</th><th>到期</th><th>设备</th><th>状态</th><th>注册</th><th></th></tr>';
+    var html = '<tr><th>邮箱</th><th>套餐</th><th>到期</th><th>设备</th><th>状态</th><th>注册</th><th style="text-align:right;">操作</th></tr>';
     if (!rows.length) html += '<tr><td colspan="7" class="empty">无用户</td></tr>';
     for (var i = 0; i < rows.length; i++) {
       var u = rows[i];
@@ -826,7 +940,10 @@ function loadUsers() {
         + '<td>' + esc(u.plan) + '</td><td>' + exp + '</td><td>' + esc(u.device_count) + '</td>'
         + '<td>' + (u.status === 'banned' ? '<span class="badge banned">banned</span>' : '<span class="badge unused">active</span>') + '</td>'
         + '<td class="dim">' + fmtTime(u.created_at) + '</td>'
-        + '<td><button class="btn ' + (u.status === 'banned' ? '' : 'danger') + '" style="padding:4px 12px; font-size:12px;" onclick="setBan(\\'' + esc(u.id) + '\\',' + (u.status === 'banned') + ')">' + (u.status === 'banned' ? '解封' : '封禁') + '</button></td></tr>';
+        + '<td style="text-align:right; white-space:nowrap;">'
+        + '<button class="btn ' + (u.status === 'banned' ? '' : 'danger') + '" style="padding:4px 12px; font-size:12px;" onclick="setBan(\\'' + esc(u.id) + '\\',' + (u.status === 'banned') + ')">' + (u.status === 'banned' ? '解封' : '封禁') + '</button> '
+        + '<button class="btn danger-soft" onclick="confirmDeleteUser(\\'' + esc(u.id) + '\\',\\'' + esc(u.email) + '\\')">删除</button>'
+        + '</td></tr>';
     }
     document.getElementById('usrTable').innerHTML = html;
   }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
@@ -835,6 +952,72 @@ function setBan(id, banned) {
   api('/users/' + encodeURIComponent(id) + '/' + (banned ? 'unban' : 'ban'), {method:'POST'}).then(function() {
     toast(banned ? '已解封' : '已封禁'); loadUsers();
   }).catch(function(e) { toast('操作失败: ' + e.message); });
+}
+
+// ---------- 删除用户（破坏性操作，两步确认）----------
+// 关闭确认框时记住「待删 id」，由 confirmDeleteUserOk 真正执行。
+var _pendingDeleteId = '';
+
+/**
+ * 打开删除确认框，并先拉取「会波及哪些数据」展示给管理员。
+ *
+ * 不直接删的原因：删用户会连带清掉云备份、同步数据、Agent 授权等
+ * 十几张表的内容（不可恢复）。管理员必须先看到具体条数再决定。
+ */
+function confirmDeleteUser(id, email) {
+  _pendingDeleteId = id;
+  document.getElementById('cfTitle').textContent = '删除用户';
+  document.getElementById('cfDesc').textContent =
+    '将永久删除 ' + email + '，并清理其全部关联数据。此操作不可恢复。';
+  document.getElementById('cfImpact').textContent = '正在统计…';
+  document.getElementById('confirm').classList.add('show');
+  api('/users/' + encodeURIComponent(id) + '/delete-preview').then(function(r) {
+    // 统计请求返回时可能已经换了别的用户，别覆盖新弹窗的内容
+    if (_pendingDeleteId !== id) return;
+    var counts = r.counts || {};
+    var keys = Object.keys(counts);
+    if (!keys.length) {
+      document.getElementById('cfImpact').textContent = '该用户没有任何关联数据。';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < keys.length; i++) {
+      html += '<div>' + esc(keys[i]) + '<span class="n">' + esc(counts[keys[i]]) + ' 条</span></div>';
+    }
+    html += '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">'
+          + '合计<b>' + esc(r.total || 0) + '</b> 条'
+          + '<span style="float:right;color:var(--text-dim);font-size:12px;">审计日志将保留</span></div>';
+    document.getElementById('cfImpact').innerHTML = html;
+  }).catch(function(e) {
+    if (_pendingDeleteId !== id) return;
+    document.getElementById('cfImpact').textContent = '统计失败：' + e.message;
+  });
+}
+
+/** 确认框点「确认删除」。 */
+function confirmDeleteUserOk() {
+  var id = _pendingDeleteId;
+  if (!id) return;
+  var btn = document.getElementById('cfOk');
+  btn.disabled = true; btn.textContent = '删除中…';
+  api('/users/' + encodeURIComponent(id), {method:'DELETE'}).then(function(r) {
+    closeConfirm();
+    var n = r.removed ? Object.keys(r.removed).length : 0;
+    toast('已删除，清理 ' + n + ' 张表');
+    if (r.failed && r.failed.length) toast('部分表清理失败，请检查: ' + r.failed.join('; '));
+    loadUsers();
+  }).catch(function(e) {
+    btn.disabled = false; btn.textContent = '确认删除';
+    toast('删除失败: ' + e.message);
+  });
+}
+
+/** 关闭确认框。 */
+function closeConfirm() {
+  _pendingDeleteId = '';
+  document.getElementById('confirm').classList.remove('show');
+  var btn = document.getElementById('cfOk');
+  if (btn) { btn.disabled = false; btn.textContent = '确认删除'; }
 }
 
 // ---------- 用量 ----------
@@ -876,6 +1059,20 @@ function loadAudit() {
     document.getElementById('login').style.display = 'flex';
   }
   document.getElementById('tk').addEventListener('keydown', function(e) { if (e.key === 'Enter') doLogin(); });
+
+  // 删除确认框：取消 / 确认 / 点遮罩 / ESC
+  // 用 addEventListener 而非内联 onclick —— TS 模板里的 onclick 需要
+  // 逐层转义单引号（上次管理台按钮全瘫就是这里少转义了一层）。
+  document.getElementById('cfCancel').addEventListener('click', closeConfirm);
+  document.getElementById('cfOk').addEventListener('click', confirmDeleteUserOk);
+  document.getElementById('confirm').addEventListener('click', function(e) {
+    if (e.target === this) closeConfirm();   // 点遮罩空白处
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && document.getElementById('confirm').classList.contains('show')) {
+      closeConfirm();
+    }
+  });
 })();
 </script>
 </body>

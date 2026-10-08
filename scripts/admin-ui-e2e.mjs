@@ -36,15 +36,36 @@ try {
 const elements = {};
 const makeEl = () => {
   const el = {
-  innerHTML: "",
-  style: new Proxy({}, { get: () => "", set: () => true }),
-  value: "", checked: false,
-  classList: { add() {}, remove() {}, toggle() {} },
-  addEventListener() {}, appendChild() {}, setAttribute() {},
-  removeAttribute() {}, getAttribute: () => null, remove() {},
-  closest: () => null, contains: () => false,
-  querySelector: () => makeEl(), querySelectorAll: () => [], dataset: {},
+    innerHTML: "",
+    style: new Proxy({}, { get: () => "", set: () => true }),
+    value: "", checked: false,
+    // classList 必须真正维护集合：原先是空实现(add(){})，导致
+    // 「确认框是否已展示」这类断言永远读到空 className 而误判。
+    classList: (() => {
+      const set = new Set();
+      return {
+        add: (...c) => c.forEach((x) => set.add(x)),
+        remove: (...c) => c.forEach((x) => set.delete(x)),
+        toggle: (c) => (set.has(c) ? set.delete(c) : set.add(c)),
+        contains: (c) => set.has(c),
+        get value() { return [...set].join(" "); },
+      };
+    })(),
+    addEventListener() {}, appendChild() {}, setAttribute() {},
+    removeAttribute() {}, getAttribute: () => null, remove() {},
+    closest: () => null, contains: () => false,
+    querySelector: () => makeEl(), querySelectorAll: () => [], dataset: {},
   };
+  // className 与 classList 同步（真实 DOM 里 className 就是 classList 的字符串视图）
+  Object.defineProperty(el, "className", {
+    get: () => el.classList.value,
+    set: (v) => {
+      // 先清掉现有类名再写入新的
+      [...el.classList.value.split(/\s+/).filter(Boolean)].forEach((c) => el.classList.remove(c));
+      String(v || "").split(/\s+/).filter(Boolean).forEach((c) => el.classList.add(c));
+    },
+    configurable: true,
+  });
   // 真实 DOM 里 textContent 赋值会反映到 innerHTML(esc() 依赖此行为)
   let _text = "";
   Object.defineProperty(el, "textContent", {
@@ -79,6 +100,18 @@ global.fetch = async (url, opts = {}) => {
     return { ok: true, status: 200, json: async () => ({ users: [
       { id: "u_abc123", email: "a@b.c", plan: "free", plan_expires_at: null, status: "active", created_at: Date.now(), device_count: 1 },
     ] }) };
+  }
+  // 删除用户的波及范围预览（确认框里展示各类数据的条数）
+  if (/\/users\/[^/]+\/delete-preview$/.test(u)) {
+    return { ok: true, status: 200, json: async () => ({
+      email: "a@b.c", total: 7, counts: { "设备": 2, "每日用量": 3, "云备份数据": 2 },
+    }) };
+  }
+  // 删除用户（DELETE /users/:id）
+  if (/\/users\/[^/]+$/.test(u) && (opts.method ?? "GET") === "DELETE") {
+    return { ok: true, status: 200, json: async () => ({
+      ok: true, removed: { sessions: 1, devices: 2, usage_daily: 3, users: 1 }, failed: [],
+    }) };
   }
   if (u.endsWith("/announcements")) {
     return { ok: true, status: 200, json: async () => ({ announcements: [
@@ -126,7 +159,8 @@ Object.assign(globalThis, { setPlan, setBan, toggleAnnouncement, deleteAnnouncem
   loadProviders, loadWeeklyUsage, saveProvider, editProvider, toggleProvider, deleteProvider,
   parseModelsInput, resetProviderForm,
   loadAgentInstances, saveAgentInstance, editAgentInstance, deleteAgentInstance,
-  clearAgentInstanceForm });
+  clearAgentInstanceForm,
+  loadUsers, confirmDeleteUser, confirmDeleteUserOk, closeConfirm });
 globalThis.__done = (function () {
   var flush = function () { return new Promise(function (r) { setTimeout(r, 30); }); };
   var grab = function (id) { var el = document.getElementById(id); return el ? el.innerHTML : ''; };
@@ -136,6 +170,14 @@ globalThis.__done = (function () {
     await flush();
     steps.push(['grantTable 行数', (grab('grantTable').match(/<tr>/g) || []).length]);
     steps.push(['grantTable HTML', grab('grantTable')]);
+    steps.push(['loadUsers', (function () { try { loadUsers(); return 'called'; } catch (e) { return 'THROW ' + e.message; } })()]);
+    await flush();
+    steps.push(['usrTable 行数', (grab('usrTable').match(/<tr>/g) || []).length]);
+    steps.push(['usrTable HTML', grab('usrTable')]);
+    steps.push(['confirmDeleteUser', (function () { try { confirmDeleteUser('u_abc123', 'a@b.c'); return 'called'; } catch (e) { return 'THROW ' + e.message; } })()]);
+    await flush();
+    steps.push(['cfImpact HTML', document.getElementById('cfImpact').innerHTML]);
+    steps.push(['confirm 已展示', String(document.getElementById('confirm').className || '')]);
     steps.push(['loadAnnouncements', (function () { try { loadAnnouncements(); return 'called'; } catch (e) { return 'THROW ' + e.message; } })()]);
     await flush();
     steps.push(['annTable 行数', (grab('annTable').match(/<tr>/g) || []).length]);
@@ -182,7 +224,7 @@ console.log("场景执行: ✅");
 
 // ---- 4) 校验 onclick ----
 let bad = 0;
-for (const key of ["grantTable HTML", "annTable HTML", "pvTable HTML", "pvUsageTable HTML", "aiTable HTML"]) {
+for (const key of ["grantTable HTML", "annTable HTML", "pvTable HTML", "pvUsageTable HTML", "aiTable HTML", "usrTable HTML"]) {
   const tableHtml = map[key] || "";
   const attrs = [...tableHtml.matchAll(/onclick="([^"]+)"/g)].map((m) => m[1]);
   console.log(`\n${key}: ${(tableHtml.match(/<tr/g) || []).length} 行, ${attrs.length} 个 onclick`);
@@ -242,6 +284,33 @@ const aiSaveCall = calls.find(
     String(c.body ?? "").includes("userId"),
 );
 const aiSaveOk = !!aiSaveCall;
+
+// 删除用户：真实点「删除」按钮 → 应打开确认框并拉预览，
+// 再点确认 → 应发出 DELETE /users/:id
+const usrHtml = map["usrTable HTML"] || "";
+const delMatch = [...usrHtml.matchAll(/onclick="([^"]+)"/g)].map((x) => x[1]).find((a) => a.startsWith("confirmDeleteUser("));
+let delFlowOk = false;
+if (!delMatch) {
+  console.log("  ❌ 用户表里没有删除按钮");
+} else {
+  const before = calls.length;
+  try { new Function(delMatch)(); } catch (e) {
+    console.log("  ❌ confirmDeleteUser 执行异常: " + e.message.slice(0, 70));
+  }
+  await new Promise((r) => setTimeout(r, 40));
+  const previewCall = calls.slice(before).find((c) => c.url.includes("delete-preview"));
+  const shown = (map["confirm 已展示"] || "").includes("show");
+  const impact = (map["cfImpact HTML"] || "");
+  console.log(previewCall ? "  ✅ confirmDeleteUser -> GET " + previewCall.url.replace("http://x", "") : "  ❌ 未拉取 delete-preview");
+  console.log(shown ? "  ✅ 确认框已展示" : "  ❌ 确认框未展示");
+  console.log(impact.includes("设备") ? "  ✅ 波及范围已渲染: " + impact.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 70) : "  ❌ 波及范围未渲染: " + impact.slice(0, 70));
+  const before2 = calls.length;
+  try { confirmDeleteUserOk(); } catch (e) { console.log("  ❌ confirmDeleteUserOk 异常: " + e.message.slice(0, 70)); }
+  await new Promise((r) => setTimeout(r, 40));
+  const delCall = calls.slice(before2).find((c) => c.method === "DELETE" && /\/users\/[^/]+$/.test(c.url));
+  console.log(delCall ? "  ✅ confirmDeleteUserOk -> DELETE " + delCall.url.replace("http://x", "") : "  ❌ 未发出 DELETE /users/:id");
+  delFlowOk = !!previewCall && shown && impact.includes("设备") && !!delCall;
+}
 console.log(
   aiSaveOk
     ? `  ✅ saveAgentInstance -> POST ${aiSaveCall.url.replace("http://x", "")} body=${String(aiSaveCall.body).slice(0, 90)}`
@@ -255,5 +324,5 @@ console.log(spCall
   : "  ❌ saveProvider 未发出带 models 的 POST /providers");
 
 console.log("\n仪表盘 sUsers:", map["sUsers 文本"] === "" ? "(空)" : map["sUsers 文本"]);
-console.log(bad === 0 && spCall && toggleOk && aiDelOk && aiSaveOk ? "\n管理台脚本全部通过" : `\n失败: onclick非法=${bad} saveProvider=${!!spCall} toggleProvider=${!!toggleOk} aiDelete=${!!aiDelOk} aiSave=${!!aiSaveOk}`);
-process.exit(bad === 0 && spCall && toggleOk && aiDelOk && aiSaveOk ? 0 : 1);
+console.log(bad === 0 && spCall && toggleOk && aiDelOk && aiSaveOk && delFlowOk ? "\n管理台脚本全部通过" : `\n失败: onclick非法=${bad} saveProvider=${!!spCall} toggleProvider=${!!toggleOk} aiDelete=${!!aiDelOk} aiSave=${!!aiSaveOk}`);
+process.exit(bad === 0 && spCall && toggleOk && aiDelOk && aiSaveOk && delFlowOk ? 0 : 1);

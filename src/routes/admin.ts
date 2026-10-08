@@ -6,6 +6,7 @@ import { requireAdmin } from "../middleware/auth";
 import { applyPlanGrant, validateAccountPlan } from "../services/account_plans";
 import { audit } from "../services/audit";
 import { weekStartDate } from "../plans";
+import { deleteUser, previewDeleteUser } from "../services/user_admin";
 import {
   deleteAgentInstance,
   getInstance,
@@ -310,4 +311,34 @@ adminRoutes.delete("/agent-instances/:userId", async (c) => {
   await deleteAgentInstance(c.get("db"), userId);
   await audit(c.get("db"), null, "agent_instance_delete", userId, "");
   return c.json({ ok: true });
+});
+
+// ---- 删除用户 ----
+// 两步式：先 GET 预览波及范围（管理台二次确认弹窗展示），再 DELETE 真正删。
+// keepAudit 默认 1：审计日志行保留、user_id 置空 —— 删用户不该抹掉
+// 「谁在什么时候授权了谁」的追溯记录。
+
+// ---- GET /admin/users/:id/delete-preview ----
+adminRoutes.get("/users/:id/delete-preview", async (c) => {
+  const id = c.req.param("id");
+  const info = await previewDeleteUser(c.get("db"), id);
+  return c.json(info);
+});
+
+// ---- DELETE /admin/users/:id ----
+adminRoutes.delete("/users/:id", async (c) => {
+  const id = c.req.param("id");
+  const db = c.get("db");
+  // ?keepAudit=0 时连审计日志一起删（合规场景用，默认保留）
+  const keepAudit = c.req.query("keepAudit") !== "0";
+  const report = await deleteUser(db, id, { keepAudit });
+  await audit(
+    db,
+    null,
+    "user_delete",
+    id,
+    `${report.email} 已删除，清理 ${Object.keys(report.removed).length} 张表` +
+      (report.failed.length ? `，失败: ${report.failed.join("; ")}` : ""),
+  );
+  return c.json({ ok: true, ...report });
 });
