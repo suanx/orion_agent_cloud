@@ -1,9 +1,16 @@
 /**
  * 云端管理台单页应用（无依赖, 内联 HTML/CSS/JS）。
  * 由 GET /admin 直接返回, 数据全部走既有 /api/admin/* 接口(Bearer ADMIN_TOKEN)。
- * UI: 纯白背景 + 磨砂液态玻璃(backdrop-filter), 左侧抽屉式导航(桌面可折叠/移动端浮出),
- *     功能按「概览/授权管理/用户管理/运营监控」分组, 5 套配色主题,
- *     主题/令牌持久化在 localStorage。
+ *
+ * UI 设计（2026-10-09 重写）:
+ *   - 双主题液态玻璃: 只有「纯白 light / 深色 dark」两套, 全站单色系,
+ *     不再提供 5 套彩色配色; 主题经 :root[data-theme] 切换 CSS 变量实现。
+ *   - 首次访问跟随系统 prefers-color-scheme, 之后记住用户选择。
+ *   - 布局沿用左抽屉导航 + 顶栏 + 卡片/面板结构, 与旧版基本一致。
+ *   - 移动端适配: ≤900px 抽屉浮出(点击遮罩关闭), ≤760px 表格转卡片、
+ *     表单纵向堆叠、确认框变底部弹层, 输入框 16px 防 iOS 聚焦缩放,
+ *     触控目标 ≥44px, 兼容刘海屏 safe-area。
+ *
  * 注意: 本文件是 TS 模板字符串, 页面 JS 一律用单引号字符串拼接,
  *       不用反引号与 ${, 避免转义问题。
  */
@@ -12,264 +19,391 @@ export function adminHtml(): string {
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
 <title>Orion Cloud 管理台</title>
 <style>
-:root {
-  --a1: #22d3ee; --a2: #818cf8;
-  --blob1: rgba(34,211,238,.42); --blob2: rgba(129,140,248,.38); --blob3: rgba(167,139,250,.34);
+/* ============================================================
+   Orion Cloud 管理台 —— 双主题液态玻璃
+   主题只有两套: light(纯白) / dark(深色), 均为单色系。
+   任何颜色都从 CSS 变量取, 换主题只换变量、不动结构。
+   ============================================================ */
 
-  --text:#172033; --text-dim:#6b7a90;
-  --glass:rgba(255,255,255,.66); --glass-strong:rgba(255,255,255,.84);
-  --border:rgba(20,35,70,.09); --input:rgba(255,255,255,.8);
-  --page:#ffffff; --danger:#e11d48; --ok:#059669;
-  --shadow:0 10px 40px rgba(30,50,90,.10);
+/* ---------- 主题变量 ---------- */
+:root, :root[data-theme="light"] {
+  color-scheme: light;
+  --page:#ffffff;
+  --text:#0d1524; --text-dim:#5f6b7e; --text-faint:#8b97a8;
+
+  --glass:rgba(255,255,255,.60);      /* 常规玻璃面板 */
+  --glass-2:rgba(255,255,255,.80);    /* 更实的玻璃: 抽屉 / 卡片 / 弹层 */
+  --glass-3:rgba(255,255,255,.46);    /* 更虚的玻璃: 表头 / 吸顶条 */
+  --border:rgba(13,21,36,.10);
+  --border-strong:rgba(13,21,36,.20);
+  --input:rgba(255,255,255,.74);
+  --hover:rgba(13,21,36,.055);
+  --stripe:rgba(13,21,36,.028);
+
+  --primary:#0d1524; --on-primary:#ffffff;
+  --danger:#dc2626; --danger-ink:#b91c1c; --on-danger:#ffffff;
+  --ok:#047857; --ok-ink:#047857;
+
+  --blob1:rgba(13,21,36,.075); --blob2:rgba(13,21,36,.055); --blob3:rgba(13,21,36,.045);
+  --shadow:0 18px 50px rgba(13,21,36,.10), 0 2px 6px rgba(13,21,36,.05);
+  --shadow-sm:0 5px 16px rgba(13,21,36,.07);
+  --grain:rgba(255,255,255,.85);      /* 玻璃顶部高光 */
+  --scrim:rgba(4,8,15,.45);
 }
-:root[data-theme="violet"] { --a1:#a78bfa; --a2:#f472b6; --blob1:rgba(167,139,250,.4); --blob2:rgba(244,114,182,.34); --blob3:rgba(129,140,248,.34); }
-:root[data-theme="forest"] { --a1:#34d399; --a2:#a3e635; --blob1:rgba(52,211,153,.36); --blob2:rgba(163,230,53,.3); --blob3:rgba(45,212,191,.34); }
-:root[data-theme="sunset"] { --a1:#fb923c; --a2:#f43f5e; --blob1:rgba(251,146,60,.36); --blob2:rgba(244,63,94,.32); --blob3:rgba(250,204,21,.3); }
-:root[data-theme="rose"]   { --a1:#fb7185; --a2:#c084fc; --blob1:rgba(251,113,133,.36); --blob2:rgba(192,132,252,.32); --blob3:rgba(244,114,182,.3); }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page:#05070c;
+  --text:#e9eef6; --text-dim:#97a3b4; --text-faint:#6f7b8c;
+
+  --glass:rgba(255,255,255,.055);
+  --glass-2:rgba(255,255,255,.085);
+  --glass-3:rgba(255,255,255,.05);
+  --border:rgba(255,255,255,.11);
+  --border-strong:rgba(255,255,255,.24);
+  --input:rgba(255,255,255,.065);
+  --hover:rgba(255,255,255,.075);
+  --stripe:rgba(255,255,255,.03);
+
+  --primary:#f2f6fb; --on-primary:#0a0f18;
+  --danger:#e5484d; --danger-ink:#fca5a5; --on-danger:#ffffff;
+  --ok:#34d399; --ok-ink:#6ee7b7;
+
+  --blob1:rgba(255,255,255,.085); --blob2:rgba(255,255,255,.06); --blob3:rgba(255,255,255,.045);
+  --shadow:0 18px 50px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.35);
+  --shadow-sm:0 5px 16px rgba(0,0,0,.4);
+  --grain:rgba(255,255,255,.16);
+  --scrim:rgba(0,0,0,.55);
+}
 
 * { margin:0; padding:0; box-sizing:border-box; }
+html { -webkit-text-size-adjust:100%; }
 body {
-  min-height:100vh; font-family:"PingFang SC","Microsoft YaHei",-apple-system,sans-serif;
+  min-height:100vh; font-family:"PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
   background:var(--page); color:var(--text); overflow-x:hidden;
+  line-height:1.55; letter-spacing:.1px;
+  -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
 }
 button { cursor:pointer; font-family:inherit; }
+::selection { background:color-mix(in srgb, var(--text) 20%, transparent); }
 
-/* ---- 纯白底 + 柔和液态光斑(低透明度, 观感仍是白底) ---- */
-.blob { position:fixed; border-radius:50%; filter:blur(100px); z-index:-1; opacity:.55; animation:drift 24s ease-in-out infinite alternate; }
-.blob.b1 { width:44vw; height:44vw; background:var(--blob1); top:-16vw; left:-8vw; }
-.blob.b2 { width:36vw; height:36vw; background:var(--blob2); bottom:-14vw; right:-6vw; animation-delay:-8s; }
-.blob.b3 { width:26vw; height:26vw; background:var(--blob3); top:34vh; left:56vw; animation-delay:-16s; }
+/* ---- 背景液态光斑(极低饱和, 纯白/深色观感不变) ---- */
+.blob { position:fixed; border-radius:50%; filter:blur(90px); z-index:-1;
+  pointer-events:none; animation:drift 26s ease-in-out infinite alternate; }
+.blob.b1 { width:46vw; height:46vw; background:var(--blob1); top:-18vw; left:-10vw; }
+.blob.b2 { width:38vw; height:38vw; background:var(--blob2); bottom:-16vw; right:-8vw; animation-delay:-9s; }
+.blob.b3 { width:28vw; height:28vw; background:var(--blob3); top:32vh; left:58vw; animation-delay:-17s; }
 @keyframes drift { from { transform:translate(0,0) scale(1); } to { transform:translate(5vw,4vh) scale(1.14); } }
 
-/* ---- 磨砂玻璃 ---- */
+/* ---- 磨砂玻璃(液态玻璃) ---- */
 .glass {
-  background:var(--glass); backdrop-filter:blur(28px) saturate(1.8);
-  -webkit-backdrop-filter:blur(28px) saturate(1.8);
-  border:1px solid var(--border); border-radius:20px;
-  box-shadow:var(--shadow);
+  background:var(--glass);
+  backdrop-filter:blur(30px) saturate(1.7);
+  -webkit-backdrop-filter:blur(30px) saturate(1.7);
+  border:1px solid var(--border);
+  border-radius:22px;
+  box-shadow:var(--shadow), inset 0 1px 0 var(--grain);
 }
-.grad-text { background:linear-gradient(120deg,var(--a1),var(--a2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+/* 单色渐变文字: 深→浅, 不引入任何彩色 */
+.grad-text { background:linear-gradient(120deg, var(--text), var(--text-dim));
+  -webkit-background-clip:text; background-clip:text; color:transparent; }
+
+/* ---- 按钮 ---- */
 .btn {
-  border:none; border-radius:12px; padding:9px 18px; font-size:14px; font-weight:600;
-  color:#fff; background:linear-gradient(120deg,var(--a1),var(--a2));
-  transition:transform .15s, box-shadow .15s, opacity .15s;
+  border:none; border-radius:13px; padding:9px 18px; font-size:14px; font-weight:650;
+  color:var(--on-primary); background:var(--primary); box-shadow:var(--shadow-sm);
+  transition:transform .15s, box-shadow .15s, opacity .15s, background .15s;
+  min-height:38px;
 }
-.btn:hover { transform:translateY(-1px); box-shadow:0 6px 18px color-mix(in srgb, var(--a1) 40%, transparent); }
+.btn:hover { transform:translateY(-1px); }
+.btn:active { transform:translateY(0); }
 .btn:disabled { opacity:.5; transform:none; }
-.btn.ghost { background:var(--glass-strong); color:var(--text); border:1px solid var(--border); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); }
-.btn.danger { background:linear-gradient(120deg,#fb7185,#e11d48); }
-.btn.icon { padding:8px 13px; font-size:16px; line-height:1; }
-input, select, textarea {
-  background:var(--input); border:1px solid var(--border); border-radius:12px;
-  padding:9px 13px; color:var(--text); font-size:14px; outline:none; font-family:inherit;
-  transition:border .2s, box-shadow .2s;
+.btn.ghost {
+  background:var(--glass-2); color:var(--text); border:1px solid var(--border);
+  backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px); box-shadow:none;
 }
-input:focus, select:focus, textarea:focus { border-color:var(--a1); box-shadow:0 0 0 3px color-mix(in srgb, var(--a1) 25%, transparent); }
-select option { color:#172033; }
-textarea { resize:vertical; font-family:inherit; }
-table { width:100%; border-collapse:collapse; font-size:13.5px; }
-th { text-align:left; padding:10px 12px; color:var(--text-dim); font-weight:600; border-bottom:1px solid var(--border); white-space:nowrap; }
-td { padding:10px 12px; border-bottom:1px solid var(--border); word-break:break-all; }
-tr:hover td { background:rgba(255,255,255,.7); }
-.badge { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:600; }
-.badge.used { background:color-mix(in srgb, var(--a1) 18%, transparent); color:var(--a1); }
-.badge.unused { background:color-mix(in srgb, var(--ok) 14%, transparent); color:var(--ok); }
-.badge.revoked, .badge.banned, .badge.error { background:color-mix(in srgb, var(--danger) 12%, transparent); color:var(--danger); }
-.mono { font-family:ui-monospace,Consolas,monospace; }
+.btn.ghost:hover { background:var(--hover); transform:translateY(-1px); }
+.btn.danger { background:var(--danger); color:var(--on-danger); }
+.btn.danger-soft {
+  background:color-mix(in srgb, var(--danger) 12%, transparent);
+  color:var(--danger-ink); border:1px solid color-mix(in srgb, var(--danger) 32%, transparent);
+  padding:5px 12px; font-size:12px; border-radius:10px; min-height:32px; box-shadow:none;
+}
+.btn.danger-soft:hover { background:color-mix(in srgb, var(--danger) 20%, transparent); transform:none; box-shadow:none; }
+.btn.icon { padding:8px 13px; font-size:16px; line-height:1; border-radius:12px; }
+
+/* ---- 表单控件 ---- */
+input, select, textarea {
+  background:var(--input); border:1px solid var(--border); border-radius:13px;
+  padding:10px 14px; color:var(--text); font-size:14px; outline:none; font-family:inherit;
+  backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+  transition:border-color .18s, box-shadow .18s, background .18s;
+}
+input::placeholder, textarea::placeholder { color:var(--text-faint); }
+input:focus, select:focus, textarea:focus {
+  border-color:var(--border-strong);
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--text) 14%, transparent);
+}
+select option { color:#0d1524; background:#ffffff; }
+:root[data-theme="dark"] select option { color:#e9eef6; background:#10151d; }
+textarea { resize:vertical; font-family:inherit; line-height:1.6; }
+input[type="checkbox"] { width:auto; accent-color:var(--primary); padding:0; }
+
+/* ---- 表格: 桌面横排(可横向滚动), 文本按词折行而非硬拆字符 ---- */
+table { width:100%; border-collapse:separate; border-spacing:0; font-size:13.5px; }
+th { text-align:left; padding:12px 14px; color:var(--text-dim); font-weight:650;
+  font-size:12.5px; letter-spacing:.4px; white-space:nowrap;
+  border-bottom:1px solid var(--border); }
+td { padding:11px 14px; border-bottom:1px solid var(--border);
+  overflow-wrap:anywhere; vertical-align:middle; line-height:1.55; }
+tbody tr:last-child td { border-bottom:none; }
+tbody tr:nth-child(even) td { background:var(--stripe); }
+tbody tr:hover td { background:var(--hover); }
+.scroll-x { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.scroll-x::-webkit-scrollbar, #drawer::-webkit-scrollbar { height:8px; width:8px; }
+.scroll-x::-webkit-scrollbar-thumb, #drawer::-webkit-scrollbar-thumb {
+  background:color-mix(in srgb, var(--text) 22%, transparent); border-radius:99px; }
+
+.badge { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px;
+  font-weight:650; letter-spacing:.2px; border:1px solid transparent; }
+.badge.used { background:var(--hover); color:var(--text); border-color:var(--border); }
+.badge.unused { background:color-mix(in srgb, var(--ok) 15%, transparent);
+  color:var(--ok-ink); border-color:color-mix(in srgb, var(--ok) 32%, transparent); }
+.badge.revoked, .badge.banned, .badge.error {
+  background:color-mix(in srgb, var(--danger) 13%, transparent);
+  color:var(--danger-ink); border-color:color-mix(in srgb, var(--danger) 34%, transparent); }
+.mono { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; letter-spacing:-.1px; }
 .dim { color:var(--text-dim); }
 
 /* ---- 左侧抽屉 ---- */
 #drawer {
-  position:fixed; left:0; top:0; bottom:0; width:236px; z-index:40;
-  background:var(--glass-strong); backdrop-filter:blur(30px) saturate(1.9);
-  -webkit-backdrop-filter:blur(30px) saturate(1.9);
+  position:fixed; left:0; top:0; bottom:0; width:244px; z-index:40;
+  display:none;                                   /* 未登录不展示导航 */
+  background:var(--glass-2);
+  backdrop-filter:blur(34px) saturate(1.8); -webkit-backdrop-filter:blur(34px) saturate(1.8);
   border-right:1px solid var(--border);
-  padding:20px 14px; display:flex; flex-direction:column;
-  transition:margin-left .25s ease, transform .25s ease;
-  overflow-y:auto;
+  box-shadow:var(--shadow);
+  padding:18px 14px calc(16px + env(safe-area-inset-bottom));
+  flex-direction:column; overflow-y:auto; overscroll-behavior:contain;
+  transition:margin-left .28s cubic-bezier(.4,0,.2,1), transform .28s cubic-bezier(.4,0,.2,1);
 }
-#drawer .brand { display:flex; align-items:center; gap:9px; padding:2px 8px 16px; font-size:17px; font-weight:900; letter-spacing:.5px; }
-.grp { font-size:11px; letter-spacing:2.5px; color:var(--text-dim); font-weight:800; margin:16px 10px 6px; }
+body.authed #drawer { display:flex; }
+#drawer .brand { display:flex; align-items:center; gap:9px; padding:2px 8px 14px;
+  font-size:17px; font-weight:900; letter-spacing:.5px; white-space:nowrap; }
+.grp { font-size:10.5px; letter-spacing:2.4px; color:var(--text-faint);
+  font-weight:800; margin:16px 10px 7px; }
 .nav-item {
-  display:flex; align-items:center; gap:10px; width:100%;
+  display:flex; align-items:center; gap:11px; width:100%; min-height:44px;
   border:none; background:transparent; color:var(--text);
-  font-size:14px; font-weight:600; padding:10px 12px; border-radius:12px;
-  text-align:left; transition:background .18s, color .18s, box-shadow .18s;
+  font-size:14px; font-weight:600; padding:11px 13px; border-radius:14px;
+  text-align:left; white-space:nowrap;
+  transition:background .18s, color .18s, box-shadow .18s;
 }
-.nav-item:hover { background:rgba(255,255,255,.9); box-shadow:0 4px 14px rgba(30,50,90,.07); }
-.nav-item.active {
-  color:#fff; background:linear-gradient(120deg,var(--a1),var(--a2));
-  box-shadow:0 6px 18px color-mix(in srgb, var(--a1) 35%, transparent);
-}
-/* ---- 黑白线条图标 ---- */
-.ic { width:18px; height:18px; flex:none; display:inline-block; vertical-align:-4px;
+.nav-item:hover { background:var(--hover); }
+.nav-item.active { color:var(--on-primary); background:var(--primary); box-shadow:var(--shadow-sm); }
+.ic { width:18px; height:18px; flex:none; display:inline-block;
   fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
-.nav-item .ic { width:18px; height:18px; vertical-align:middle; }
-.panel h2 .ic { width:17px; height:17px; vertical-align:-3px; }
-#drawer .foot { margin-top:auto; padding-top:16px; border-top:1px solid var(--border); display:flex; gap:8px; }
-#drawer .foot .btn { flex:1; padding:8px 10px; font-size:13px;
+.nav-item .ic { width:18px; height:18px; }
+#drawer .foot { margin-top:auto; padding-top:16px; border-top:1px solid var(--border);
+  display:flex; gap:8px; }
+#drawer .foot .btn { flex:1; padding:8px 10px; font-size:13px; min-height:40px;
   display:inline-flex; align-items:center; justify-content:center; gap:5px; }
 
 /* 桌面折叠 */
-body.collapsed #drawer { margin-left:-236px; }
+body.collapsed #drawer { margin-left:-244px; }
 body.collapsed #app { margin-left:0; }
-#mask { position:fixed; inset:0; background:rgba(15,23,42,.3); backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); z-index:35; display:none; }
+#mask { position:fixed; inset:0; background:var(--scrim); z-index:35; display:none;
+  backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); }
 body.drawer-open #mask { display:block; }
 
 /* ---- 主区 ---- */
-#app { display:none; margin-left:236px; transition:margin-left .25s ease; }
-#app .inner { max-width:1180px; margin:0 auto; padding:22px 20px 60px; }
-header.top { display:flex; align-items:center; gap:12px; margin-bottom:20px; flex-wrap:wrap; }
-header.top h1 { font-size:20px; font-weight:800; letter-spacing:.5px; }
+#app { display:none; margin-left:244px; transition:margin-left .28s cubic-bezier(.4,0,.2,1); }
+#app .inner { max-width:1440px; margin:0 auto; padding:0 28px 72px; }
+header.top {
+  position:sticky; top:0; z-index:20;
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  padding:16px 0 15px; margin-bottom:8px;
+  background:linear-gradient(180deg, var(--page) 74%, transparent);
+}
+header.top::after {
+  content:''; position:absolute; left:0; right:0; bottom:0; height:1px;
+  background:linear-gradient(90deg, var(--border), transparent 72%);
+}
+header.top h1 { font-size:20px; font-weight:800; letter-spacing:.3px; }
 header.top .spacer { flex:1; }
 section.view { display:none; }
 section.view.active { display:block; }
-.grid.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin-bottom:18px; }
-.stat { padding:18px 20px; position:relative; overflow:hidden; }
-.stat .num { font-size:30px; font-weight:800; margin-top:4px; }
-.stat .lbl { font-size:13px; color:var(--text-dim); }
-.stat::after { content:''; position:absolute; right:-22px; top:-22px; width:80px; height:80px; border-radius:50%;
-  background:linear-gradient(120deg,var(--a1),var(--a2)); opacity:.14; }
-.panel { padding:20px; margin-bottom:18px; }
-.panel h2 { font-size:16px; font-weight:700; margin-bottom:14px; display:flex; align-items:center; gap:8px; }
-.row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
-.scroll-x { overflow-x:auto; border-radius:12px; }
-.empty { text-align:center; padding:28px; color:var(--text-dim); font-size:14px; }
-#toast { position:fixed; bottom:26px; left:50%; transform:translateX(-50%) translateY(80px); z-index:99;
-  padding:11px 22px; font-size:14px; font-weight:600; color:#fff; border-radius:14px;
-  background:rgba(15,23,42,.85); backdrop-filter:blur(12px); transition:transform .3s; }
-#toast.show { transform:translateX(-50%) translateY(0); }
 
-/* ---- 登录 ---- */
-#login { display:none; min-height:100vh; align-items:center; justify-content:center; padding:20px; }
-#login .box { width:min(400px,92vw); padding:38px 32px; text-align:center; }
-#login h1 { font-size:24px; font-weight:800; margin:14px 0 6px; }
-#login p { color:var(--text-dim); font-size:13px; margin-bottom:22px; }
-#login input { width:100%; margin-bottom:14px; text-align:center; }
-
-/* ---- 主题选择器 ---- */
-.theme-pop { position:absolute; top:46px; right:0; padding:12px; z-index:50; width:210px; background:var(--glass-strong); }
-.theme-dot { width:30px; height:30px; border-radius:50%; cursor:pointer; border:2px solid transparent; transition:transform .15s, border .15s; }
-.theme-dot:hover { transform:scale(1.15); }
-.theme-dot.sel { border-color:var(--text); }
-.t-aurora { background:linear-gradient(120deg,#22d3ee,#818cf8); }
-.t-violet { background:linear-gradient(120deg,#a78bfa,#f472b6); }
-.t-forest { background:linear-gradient(120deg,#34d399,#a3e635); }
-.t-sunset { background:linear-gradient(120deg,#fb923c,#f43f5e); }
-.t-rose   { background:linear-gradient(120deg,#fb7185,#c084fc); }
-.rel { position:relative; }
-
-/* ============================================================
-   布局优化（2026-10-09）
-   目标：信息密度分层、主次分明、宽屏不浪费、窄屏不拥挤。
-   做法是纯 CSS 增量覆盖，不动既有类名，避免牵动全部视图。
-   ============================================================ */
-
-/* 1) 内容区留白与最大宽度 —— 原 1180px 在 27" 屏上右侧大片空白。
-      放宽到 1440px 并加大行距，长列表滚动时眼睛不容易串行。 */
-#app .inner { max-width:1440px; padding:26px 28px 72px; }
-
-/* 2) 页头：加一条细分隔与下边距，标题与内容的层次更清楚。
-      sticky 让切换视图时标题常驻，长页面下不至于迷路。 */
-header.top {
-  position:sticky; top:0; z-index:20;
-  padding:12px 0 14px; margin-bottom:22px;
-  background:linear-gradient(180deg, var(--glass-strong) 72%, transparent);
-  backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
-}
-header.top h1 { font-size:21px; letter-spacing:.2px; }
-header.top::after {
-  content:''; display:block; flex-basis:100%; height:1px;
-  margin-top:12px;
-  background:linear-gradient(90deg, var(--border), transparent 70%);
+/* 统计卡片 */
+.grid.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(176px,1fr));
+  gap:16px; margin-bottom:20px; }
+.stat { padding:16px 18px 18px; position:relative; overflow:hidden; border-radius:20px; }
+.stat .num { font-size:32px; font-weight:800; margin-top:2px; letter-spacing:-.5px;
+  line-height:1.15; font-variant-numeric:tabular-nums; }
+.stat .lbl { font-size:12.5px; color:var(--text-dim); letter-spacing:.3px; }
+.stat::after {
+  content:''; position:absolute; right:-30px; top:-30px; width:104px; height:104px;
+  border-radius:50%; pointer-events:none;
+  background:radial-gradient(circle, color-mix(in srgb, var(--text) 13%, transparent), transparent 72%);
 }
 
-/* 3) 统计卡片：数字更醒目，加一条顶部渐变强调线做视觉锚点。
-      minmax 从 200 降到 176，宽屏能排下更多列而不显拥挤。 */
-.grid.cards { grid-template-columns:repeat(auto-fit,minmax(176px,1fr)); gap:16px; margin-bottom:22px; }
-.stat { padding:16px 18px 18px; border-radius:16px; }
-.stat::before {
-  content:''; position:absolute; left:0; right:0; top:0; height:3px;
-  background:linear-gradient(90deg,var(--a1),var(--a2)); opacity:.85;
+/* 面板 */
+.panel { padding:0; margin-bottom:20px; border-radius:20px; overflow:hidden;
+  transition:box-shadow .2s; }
+.panel:hover { box-shadow:0 14px 40px color-mix(in srgb, var(--text) 8%, transparent); }
+.panel h2 {
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap; row-gap:8px;
+  margin:0; padding:16px 20px 14px; border-bottom:1px solid var(--border);
+  font-size:15.5px; font-weight:700;
 }
-.stat .num { font-size:32px; font-weight:800; margin-top:2px; letter-spacing:-.5px; line-height:1.15; }
-.stat .lbl { font-size:12.5px; letter-spacing:.3px; }
-
-/* 4) 面板：标题与内容之间加一条淡分隔，标题不再「贴」着表格。
-      hover 时极轻微上浮，长列表面板之间有呼吸感。 */
-.panel { padding:0; margin-bottom:20px; border-radius:18px; overflow:hidden; transition:box-shadow .2s, transform .2s; }
-.panel:hover { box-shadow:0 10px 34px rgba(30,50,90,.09); }
-.panel h2 { margin:0; padding:15px 20px 13px; border-bottom:1px solid var(--border); font-size:15.5px; }
-.panel > .row, .panel > .scroll-x, .panel > .empty { margin-left:20px; margin-right:20px; }
+.panel h2 .ic { width:17px; height:17px; }
+.panel h2 .btn { margin-left:auto; padding:5px 13px; font-size:12.5px; min-height:32px; }
+.panel > .row, .panel > .scroll-x, .panel > .note { margin-left:20px; margin-right:20px; }
 .panel > .row:first-of-type { margin-top:16px; }
-.panel > .scroll-x:last-child, .panel > .empty:last-child { margin-bottom:18px; }
+.panel > .row:last-child { margin-bottom:20px; }
+.panel > .scroll-x:last-child, .panel > .note:last-child { margin-bottom:20px; }
+.note { font-size:12.5px; line-height:1.8; }
+.panel > .note { margin-top:16px; }
 
-/* 5) 表格：隔行淡底 + 行高收敛，一屏能看更多行。
-      first/last-child 竖向 padding 收到 0，避免外层 margin 叠加后
-      出现「表格离面板边缘有一段空白」的割裂感。 */
-table { font-size:13.5px; }
-th { padding:11px 14px; font-size:12.5px; letter-spacing:.4px; position:sticky; top:0;
-     background:var(--glass-strong); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); z-index:1; }
-td { padding:9px 14px; }
-tbody tr:nth-child(even) td { background:color-mix(in srgb, var(--text) 3%, transparent); }
-tbody tr:hover td { background:color-mix(in srgb, var(--a1) 8%, transparent); }
-.scroll-x { border-radius:0; max-height:none; }
-.scroll-x table tr:last-child td { border-bottom:none; }
+.row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom:14px; }
+.row > input, .row > select, .row > textarea { flex:1 1 auto; min-width:150px; }
+.row > span, .row > label { font-size:13px; color:var(--text-dim); }
+.row > label { display:flex; align-items:center; gap:6px; }
+.empty { text-align:center; padding:30px 20px; color:var(--text-dim); font-size:14px; }
 
-/* 6) 表单行：label 与控件之间留固定间距，控件不再挤在一起 */
-.row { gap:12px; margin-bottom:14px; }
-.row > input, .row > select, .row > textarea { flex:1; min-width:150px; }
-
-/* 7) 双列面板（宽屏并排，窄屏自动回落单列）。
-      仪表盘的「用量趋势」与「公告」这类面板放一起更紧凑。 */
+.grid.duo { display:block; }
 @media (min-width:1100px) {
   .grid.duo { display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start; }
   .grid.duo > .panel { margin-bottom:0; }
 }
 
-/* 8) 危险操作按钮：小一号、描边为主，不与主操作抢视觉权重 */
-.btn.danger-soft {
-  background:color-mix(in srgb, var(--danger) 10%, transparent);
-  color:var(--danger); border:1px solid color-mix(in srgb, var(--danger) 32%, transparent);
-  padding:4px 11px; font-size:12px; border-radius:9px;
+/* ---- Toast ---- */
+#toast {
+  position:fixed; left:50%; z-index:99; max-width:calc(100vw - 32px);
+  bottom:calc(26px + env(safe-area-inset-bottom));
+  transform:translateX(-50%) translateY(90px); opacity:0;
+  padding:11px 22px; font-size:14px; font-weight:650; text-align:center;
+  color:var(--on-primary); background:var(--primary);
+  border-radius:999px; box-shadow:var(--shadow);
+  transition:transform .3s, opacity .3s; word-break:break-word;
 }
-.btn.danger-soft:hover { background:color-mix(in srgb, var(--danger) 18%, transparent); box-shadow:none; transform:none; }
+#toast.show { transform:translateX(-50%) translateY(0); opacity:1; }
 
-/* 9) 二次确认弹窗（删除用户等破坏性操作） */
+/* ---- 登录 ---- */
+#login { display:none; min-height:100vh; min-height:100dvh;
+  align-items:center; justify-content:center; padding:24px; }
+#login .box { width:min(420px,100%); padding:38px 32px; text-align:center; border-radius:26px; }
+#login h1 { font-size:23px; font-weight:800; margin:16px 0 6px; }
+#login p { color:var(--text-dim); font-size:13px; margin-bottom:22px; }
+#login input { width:100%; margin-bottom:14px; text-align:center; }
+#login .btn { width:100%; padding:12px; min-height:46px; letter-spacing:4px; }
+
+/* ---- 主题切换按钮 ---- */
+.ic-moon { display:none; }
+:root[data-theme="dark"] .ic-moon { display:inline-block; }
+:root[data-theme="dark"] .ic-sun { display:none; }
+
+/* ---- 二次确认弹窗 ---- */
 #confirm { display:none; position:fixed; inset:0; z-index:120;
   align-items:center; justify-content:center; padding:20px;
-  background:rgba(15,23,42,.42); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); }
+  background:var(--scrim); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); }
 #confirm.show { display:flex; }
-#confirm .box { width:min(440px,92vw); padding:26px 24px 20px; border-radius:20px; }
+#confirm .box { width:min(440px,100%); padding:26px 24px 20px; border-radius:22px; }
 #confirm h3 { font-size:17px; font-weight:800; margin:0 0 10px; display:flex; align-items:center; gap:8px; }
-#confirm p { font-size:13.5px; line-height:1.6; color:var(--text-dim); margin:0 0 12px; }
+#confirm p { font-size:13.5px; line-height:1.7; color:var(--text-dim); margin:0 0 12px; }
 #confirm .impact {
-  max-height:190px; overflow:auto; margin-bottom:14px; padding:12px 14px; border-radius:12px;
-  background:color-mix(in srgb, var(--text) 5%, transparent);
-  font-size:13px; line-height:1.75;
+  max-height:200px; overflow:auto; margin-bottom:16px; padding:12px 14px; border-radius:14px;
+  background:var(--hover); font-size:13px; line-height:1.8;
 }
 #confirm .impact b { font-weight:700; }
-#confirm .impact .n { float:right; color:var(--danger); font-weight:700; }
+#confirm .impact .n { float:right; color:var(--danger-ink); font-weight:700; }
 #confirm .acts { display:flex; gap:10px; justify-content:flex-end; }
+#confirm .acts .btn { min-width:96px; }
 
-/* 10) 窄屏微调 */
-@media (max-width:820px) {
-  #app .inner { padding:18px 14px 60px; }
-  .grid.duo { grid-template-columns:1fr; }
-  header.top { position:static; backdrop-filter:none; -webkit-backdrop-filter:none; }
-  .stat::before { height:2px; }
+/* ============================================================
+   响应式: 移动端适配
+   ≤900px  抽屉改为浮出式(遮罩 + 侧滑)
+   ≤760px  表格转卡片、表单纵向堆叠、弹窗变底部面板
+   ============================================================ */
+@media (max-width:900px) {
+  #drawer { transform:translateX(-102%); box-shadow:0 0 60px rgba(0,0,0,.35); }
+  body.drawer-open #drawer { transform:translateX(0); }
+  /* 覆盖桌面折叠态的负 margin(特异性相同, 靠后声明生效) */
+  body.collapsed #drawer { margin-left:0; }
+  #app, body.collapsed #app { margin-left:0; }
 }
 
-/* ---- 响应式: 移动端抽屉浮出 ---- */
-@media (max-width:820px) {
-  #drawer { transform:translateX(-100%); box-shadow:0 0 60px rgba(30,50,90,.18); }
-  body.drawer-open #drawer { transform:translateX(0); }
-  #app, body.collapsed #app { margin-left:0; }
-  #app .inner { padding:16px 14px 60px; }
-  .stat .num { font-size:24px; }
+@media (max-width:760px) {
+  #app .inner { padding:0 14px calc(60px + env(safe-area-inset-bottom)); }
+  header.top { padding:12px 0 12px; margin-bottom:6px; gap:8px; }
+  header.top h1 { font-size:17px; }
+  .btn { min-height:42px; padding:9px 15px; }
+  .btn.danger-soft { min-height:40px; }   /* 覆盖桌面 32px, 保证触控够大 */
+
+  /* 统计卡片: 两列 */
+  .grid.cards { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+  .stat { padding:13px 14px 14px; border-radius:16px; }
+  .stat .num { font-size:25px; }
+  .stat .lbl { font-size:11.5px; }
+
+  /* 面板与表单 */
+  .panel h2 { padding:14px 15px 12px; font-size:14.5px; }
+  .panel > .row, .panel > .scroll-x, .panel > .note { margin-left:15px; margin-right:15px; }
+  .row { flex-direction:column; align-items:stretch; gap:10px; }
+  .row > input, .row > select, .row > textarea {
+    flex:0 0 auto !important; width:100% !important; min-width:0 !important; }
+  .row > label { justify-content:flex-start; }
+
+  /* 表格 → 卡片: 表头隐藏, 每行一张玻璃卡, 单元格标签置顶 */
+  .scroll-x { overflow-x:visible; }
+  .scroll-x table, .scroll-x tbody, .scroll-x tr { display:block; width:100%; }
+  .scroll-x thead, .scroll-x tr.hrow { display:none; }   /* 表头行不参与卡片 */
+  .scroll-x tbody tr {
+    border:1px solid var(--border); border-radius:16px; overflow:hidden;
+    margin-bottom:12px; padding:4px 0; background:var(--glass-2);
+    box-shadow:var(--shadow-sm); transition:border-color .18s;
+  }
+  .scroll-x tbody tr:hover { border-color:var(--border-strong); }
+  .scroll-x tbody tr:last-child { margin-bottom:0; }
+  .scroll-x td {
+    display:flex; flex-direction:column; align-items:stretch; gap:5px;
+    width:100%; padding:9px 15px; text-align:left;
+    background:transparent !important;             /* 关掉桌面斑马纹/悬停底色 */
+    border-bottom:1px solid var(--border);
+  }
+  .scroll-x td[data-label]::before {
+    content:attr(data-label); color:var(--text-dim);
+    font-size:11.5px; font-weight:700; letter-spacing:.5px;
+  }
+  .scroll-x td:last-child { border-bottom:none; }
+  .scroll-x td.empty { display:block; text-align:center; padding:26px 16px; background:transparent !important; }
+  /* 操作列: 没有表头文字, 横排按钮铺满可点区域 */
+  .scroll-x td:not(.empty):not([data-label]) {
+    flex-direction:row; flex-wrap:wrap; gap:8px; align-items:center; padding-top:5px; }
+  .scroll-x td:not(.empty):not([data-label]) > .btn { flex:1 1 92px; min-height:42px; }
+  /* 表单组(如授权套餐三件套)铺满一行 */
+  .scroll-x td > div { width:100%; }
+  .scroll-x td > div > select, .scroll-x td > div > input {
+    flex:1 1 92px !important; width:auto !important; min-width:0; }
+  .scroll-x td > div > .btn { flex:1 1 92px; }
+
+  /* 破坏性操作弹窗 → 底部面板 */
+  #confirm { align-items:flex-end; padding:0; }
+  #confirm .box { width:100%; border-radius:24px 24px 0 0;
+    padding:24px 18px calc(18px + env(safe-area-inset-bottom)); }
+  #confirm .acts .btn { flex:1; min-width:0; }
+
+  /* 输入框字号 ≥16px, 防止 iOS 聚焦自动放大。
+     表格卡里的控件带着行内小字号, 必须用 !important 覆盖。 */
+  input, select, textarea { font-size:16px !important; padding:11px 14px !important; }
+  .scroll-x input, .scroll-x select { padding:10px 12px !important; }
+  .scroll-x .btn { font-size:13.5px !important; }
+  #login .box { padding:32px 22px; }
+  #login h1 { font-size:21px; }
+  #toast { font-size:13.5px; padding:10px 18px; }
 }
 </style>
 </head>
@@ -281,7 +415,8 @@ tbody tr:hover td { background:color-mix(in srgb, var(--a1) 8%, transparent); }
   <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M21 20H3"/></symbol>
   <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v5.5c0 4.2 2.9 7.6 7 9.5 4.1-1.9 7-5.3 7-9.5V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></symbol>
   <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></symbol>
-  <symbol id="i-contrast" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.2 5.2l1.6 1.6M17.2 17.2l1.6 1.6M18.8 5.2l-1.6 1.6M6.8 17.2l-1.6 1.6"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.5 14.8A8.7 8.7 0 0 1 9.2 3.5a8.8 8.8 0 1 0 11.3 11.3Z" fill="currentColor" stroke="none"/></symbol>
   <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></symbol>
   <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3.5 6h.01"/><path d="M3.5 12h.01"/><path d="M3.5 18h.01"/></symbol>
   <symbol id="i-mega" viewBox="0 0 24 24"><path d="m3 11 14-6v14L3 13v-2Z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/><path d="M17 9.5a4 4 0 0 1 0 5"/></symbol>
@@ -298,9 +433,9 @@ tbody tr:hover td { background:color-mix(in srgb, var(--a1) 8%, transparent); }
     </div>
     <h1>管理台</h1>
     <p>输入管理令牌（ADMIN_TOKEN）进入</p>
-    <input id="tk" type="password" placeholder="ADMIN_TOKEN">
-    <button class="btn" style="width:100%; padding:12px;" onclick="doLogin()">进 入</button>
-    <div id="loginErr" class="dim" style="margin-top:12px; font-size:13px; min-height:18px; color:var(--danger);"></div>
+    <input id="tk" type="password" placeholder="ADMIN_TOKEN" autocomplete="current-password">
+    <button class="btn" onclick="doLogin()">进 入</button>
+    <div id="loginErr" class="dim" style="margin-top:12px; font-size:13px; min-height:18px; color:var(--danger-ink);"></div>
   </div>
 </div>
 
@@ -328,7 +463,11 @@ tbody tr:hover td { background:color-mix(in srgb, var(--a1) 8%, transparent); }
   <button class="nav-item" data-v="audit" onclick="show('audit')"><svg class="ic" aria-hidden="true"><use href="#i-shield"></use></svg> 审计日志</button>
 
   <div class="foot">
-    <button class="btn ghost" onclick="togglePop(event)" title="配色主题"><svg class="ic" style="width:15px; height:15px;" aria-hidden="true"><use href="#i-contrast"></use></svg> 主题</button>
+    <button class="btn ghost" onclick="toggleTheme()" title="纯白 / 深色 切换">
+      <svg class="ic ic-sun" style="width:15px; height:15px;" aria-hidden="true"><use href="#i-sun"></use></svg>
+      <svg class="ic ic-moon" style="width:15px; height:15px;" aria-hidden="true"><use href="#i-moon"></use></svg>
+      外观
+    </button>
     <button class="btn ghost" onclick="doLogout()">退出</button>
   </div>
 </aside>
@@ -337,21 +476,13 @@ tbody tr:hover td { background:color-mix(in srgb, var(--a1) 8%, transparent); }
 <div id="app">
  <div class="inner">
   <header class="top">
-    <button class="btn ghost icon" onclick="toggleDrawer()" title="展开/收起导航"><svg class="ic" style="width:17px; height:17px;" aria-hidden="true"><use href="#i-menu"></use></svg></button>
+    <button class="btn ghost icon" onclick="toggleDrawer()" title="展开/收起导航" aria-label="展开/收起导航"><svg class="ic" style="width:17px; height:17px;" aria-hidden="true"><use href="#i-menu"></use></svg></button>
     <h1 id="pageTitle">首页</h1>
     <div class="spacer"></div>
-    <div class="rel">
-      <div id="themePop" class="theme-pop glass" style="display:none;">
-        <div class="dim" style="font-size:12px; margin-bottom:8px;">配色主题</div>
-        <div style="display:flex; gap:9px; justify-content:center;">
-          <div class="theme-dot t-aurora" data-t="aurora" onclick="setTheme('aurora')"></div>
-          <div class="theme-dot t-violet" data-t="violet" onclick="setTheme('violet')"></div>
-          <div class="theme-dot t-forest" data-t="forest" onclick="setTheme('forest')"></div>
-          <div class="theme-dot t-sunset" data-t="sunset" onclick="setTheme('sunset')"></div>
-          <div class="theme-dot t-rose" data-t="rose" onclick="setTheme('rose')"></div>
-        </div>
-      </div>
-    </div>
+    <button class="btn ghost icon" id="themeBtn" onclick="toggleTheme()" title="纯白 / 深色 切换" aria-label="切换纯白或深色主题">
+      <svg class="ic ic-sun" style="width:17px; height:17px;" aria-hidden="true"><use href="#i-sun"></use></svg>
+      <svg class="ic ic-moon" style="width:17px; height:17px;" aria-hidden="true"><use href="#i-moon"></use></svg>
+    </button>
   </header>
 
   <section id="v-dash" class="view active">
@@ -364,14 +495,14 @@ tbody tr:hover td { background:color-mix(in srgb, var(--a1) 8%, transparent); }
     </div>
     <div class="panel glass">
       <h2><svg class="ic" aria-hidden="true"><use href="#i-pin"></use></svg> 概览</h2>
-      <div class="dim" id="dashNote" style="font-size:13.5px; line-height:1.8;">加载中...</div>
+      <div class="dim note" id="dashNote">加载中...</div>
     </div>
   </section>
 
   <section id="v-grant" class="view">
     <div class="panel glass">
-      <h2><svg class="ic" aria-hidden="true"><use href="#i-key"></use></svg> 账号授权 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadGrant()">刷新</button></h2>
-      <div class="dim" style="font-size:13px; margin-bottom:10px;">
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-key"></use></svg> 账号授权 <button class="btn ghost" onclick="loadGrant()">刷新</button></h2>
+      <div class="dim note">
         直接为账号设置套餐（卡密已下线）。模式：<b>设置</b> = 从现在起算；<b>顺延</b> = 在现有到期时间上叠加（更高套餐未过期时保留高套餐仅顺延）。
         free = 撤销授权。
       </div>
@@ -381,7 +512,7 @@ tbody tr:hover td { background:color-mix(in srgb, var(--a1) 8%, transparent); }
 
   <section id="v-usr" class="view">
     <div class="panel glass">
-      <h2><svg class="ic" aria-hidden="true"><use href="#i-users"></use></svg> 用户列表 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadUsers()">刷新</button></h2>
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-users"></use></svg> 用户列表 <button class="btn ghost" onclick="loadUsers()">刷新</button></h2>
       <div class="scroll-x"><table id="usrTable"></table></div>
     </div>
   </section>
@@ -395,7 +526,7 @@ tbody tr:hover td { background:color-mix(in srgb, var(--a1) 8%, transparent); }
 
   <section id="v-audit" class="view">
     <div class="panel glass">
-      <h2><svg class="ic" aria-hidden="true"><use href="#i-shield"></use></svg> 审计日志 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadAudit()">刷新</button></h2>
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-shield"></use></svg> 审计日志 <button class="btn ghost" onclick="loadAudit()">刷新</button></h2>
       <div class="scroll-x"><table id="auditTable"></table></div>
     </div>
   </section>
@@ -403,13 +534,13 @@ tbody tr:hover td { background:color-mix(in srgb, var(--a1) 8%, transparent); }
   <section id="v-ann" class="view">
     <div class="panel glass">
       <h2><svg class="ic" aria-hidden="true"><use href="#i-mega"></use></svg> 发布/编辑公告</h2>
-      <div class="row"><input id="annTitle" placeholder="公告标题" style="flex:1; min-width:220px;"></div>
+      <div class="row"><input id="annTitle" placeholder="公告标题"></div>
       <div class="row"><textarea id="annContent" rows="5" placeholder="公告正文（App 内弹窗展示）" style="width:100%; min-width:220px;"></textarea></div>
       <div class="row">
-        <span class="dim" style="font-size:13px;">版本范围（留空 = 全部版本）：</span>
-        <input id="annMin" placeholder="最低版本 如 0.2.33" style="width:170px;">
-        <input id="annMax" placeholder="最高版本 如 0.2.40" style="width:170px;">
-        <label style="font-size:13px; display:flex; align-items:center; gap:5px;"><input type="checkbox" id="annEnabled" checked style="width:auto;"> 启用</label>
+        <span class="dim">版本范围（留空 = 全部版本）：</span>
+        <input id="annMin" placeholder="最低版本 如 0.2.33">
+        <input id="annMax" placeholder="最高版本 如 0.2.40">
+        <label><input type="checkbox" id="annEnabled" checked> 启用</label>
       </div>
       <div class="row">
         <button class="btn" onclick="saveAnnouncement()">发布</button>
@@ -418,7 +549,7 @@ tbody tr:hover td { background:color-mix(in srgb, var(--a1) 8%, transparent); }
       </div>
     </div>
     <div class="panel glass">
-      <h2><svg class="ic" aria-hidden="true"><use href="#i-list"></use></svg> 公告列表 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadAnnouncements()">刷新</button></h2>
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-list"></use></svg> 公告列表 <button class="btn ghost" onclick="loadAnnouncements()">刷新</button></h2>
       <div class="scroll-x"><table id="annTable"></table></div>
     </div>
   </section>
@@ -440,20 +571,20 @@ tbody tr:hover td { background:color-mix(in srgb, var(--a1) 8%, transparent); }
       <div class="row">
         <button class="btn" onclick="saveProvider()">保存</button>
         <button class="btn ghost" onclick="resetProviderForm()">清空表单</button>
-        <label style="font-size:13px; display:flex; align-items:center; gap:5px;"><input type="checkbox" id="pvEnabled" checked style="width:auto;"> 启用（停用后 App 端不再显示云端模型）</label>
+        <label><input type="checkbox" id="pvEnabled" checked> 启用（停用后 App 端不再显示云端模型）</label>
         <span class="dim" id="pvEditing" style="font-size:12px;"></span>
       </div>
-      <p class="dim" style="font-size:12px; margin:10px 0 0;">
+      <p class="dim note">
         API Key 用 JWT_SECRET 派生密钥加密后存库，永不回传给 App；更换 JWT_SECRET 会导致已存 Key 无法解密，需重新录入。<br>
         计费口径：一轮对话 = 一次请求（无论该轮工具调用多少次），消耗 1 点周额度。额度每周一 00:00（UTC+8）自动归零。
       </p>
     </div>
     <div class="panel glass">
-      <h2><svg class="ic" aria-hidden="true"><use href="#i-list"></use></svg> 已配置供应商 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadProviders()">刷新</button></h2>
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-list"></use></svg> 已配置供应商 <button class="btn ghost" onclick="loadProviders()">刷新</button></h2>
       <div class="scroll-x"><table id="pvTable"></table></div>
     </div>
     <div class="panel glass">
-      <h2><svg class="ic" aria-hidden="true"><use href="#i-chart"></use></svg> 本周云端额度用量 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadWeeklyUsage()">刷新</button></h2>
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-chart"></use></svg> 本周云端额度用量 <button class="btn ghost" onclick="loadWeeklyUsage()">刷新</button></h2>
       <div class="scroll-x"><table id="pvUsageTable"></table></div>
     </div>
   </section>
@@ -470,19 +601,19 @@ tbody tr:hover td { background:color-mix(in srgb, var(--a1) 8%, transparent); }
       </div>
       <div class="row">
         <input id="aiApiKey" type="password" placeholder="API Key（该实例的 AGENT_API_KEY；编辑时留空 = 不改动）" style="flex:1; min-width:260px;">
-        <label style="font-size:13px; display:flex; align-items:center; gap:5px;"><input type="checkbox" id="aiEnabled" checked style="width:auto;"> 启用（停用后该用户 App 内入口消失）</label>
+        <label><input type="checkbox" id="aiEnabled" checked> 启用（停用后该用户 App 内入口消失）</label>
       </div>
       <div class="row">
         <button class="btn" onclick="saveAgentInstance()">保存授权</button>
         <button class="btn ghost" onclick="clearAgentInstanceForm()">清空表单</button>
       </div>
-      <p class="dim" style="font-size:12px; margin:10px 0 0;">
+      <p class="dim note">
         用户自行部署 orion-forge 后，把它的地址与 AGENT_API_KEY 填在这里即可开通。<br>
         App 端<b>不提供任何填写入口</b>，也看不到这个地址与密钥——只知道自己有「云端 Agent」可用。未开通的用户不显示任何入口。
       </p>
     </div>
     <div class="panel glass">
-      <h2><svg class="ic" aria-hidden="true"><use href="#i-list"></use></svg> 已授权实例 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadAgentInstances()">刷新</button></h2>
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-list"></use></svg> 已授权实例 <button class="btn ghost" onclick="loadAgentInstances()">刷新</button></h2>
       <div class="scroll-x"><table id="aiTable"></table></div>
     </div>
   </section>
@@ -508,6 +639,8 @@ tbody tr:hover td { background:color-mix(in srgb, var(--a1) 8%, transparent); }
 var APIBASE = (location.pathname.indexOf('/api') === 0 ? '/api' : '') + '/admin';
 var TOKEN = localStorage.getItem('orion_admin_token') || '';
 var VIEW_META = { dash:'首页', grant:'账号授权', ann:'公告管理', prov:'供应商配置', inst:'Agent 实例授权', usr:'用户列表', usage:'用量统计', audit:'审计日志' };
+// 抽屉浮出断点, 必须与 CSS @media (max-width:900px) 保持一致
+var MOBILE_W = 900;
 
 function api(path, opts) {
   opts = opts || {};
@@ -526,25 +659,58 @@ function toast(msg) {
 function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
 function fmtTime(ms) { if (!ms) return '—'; var d = new Date(Number(ms)); return d.toLocaleString('zh-CN', {hour12:false}); }
 
-// ---------- 主题 ----------
+/**
+ * 渲染表格并按表头给每个 td 打上 data-label。
+ * 移动端(≤760px)表格转卡片后, 单元格靠 data-label 显示列名;
+ * 桌面端不受影响(标签只在媒体查询里出现)。
+ * colspan 的空态行、空表头列不打标签。
+ */
+function renderTable(id, html) {
+  var el = document.getElementById(id);
+  el.innerHTML = html;
+  var trs = el.querySelectorAll('tr');
+  if (!trs.length) return;
+  var heads = trs[0].querySelectorAll('th');
+  if (!heads.length) return;
+  // 表头行没有用 thead 包裹, 只是一条普通首行; 移动端卡片化时
+  // 只把 thead 设为 display:none 藏不掉它, 这里打标记交给 CSS 处理。
+  trs[0].classList.add('hrow');
+  var labels = [];
+  for (var i = 0; i < heads.length; i++) labels.push(heads[i].textContent.trim());
+  for (var r = 1; r < trs.length; r++) {
+    var tds = trs[r].querySelectorAll('td');
+    for (var c = 0; c < tds.length && c < labels.length; c++) {
+      if (!labels[c] || tds[c].getAttribute('colspan')) continue;
+      tds[c].setAttribute('data-label', labels[c]);
+    }
+  }
+}
+
+// ---------- 主题: 只有纯白 / 深色两套 ----------
 function setTheme(t) {
-  document.documentElement.setAttribute('data-theme', t);
-  localStorage.setItem('orion_admin_theme', t); markTheme(t);
+  var v = t === 'dark' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', v);
+  localStorage.setItem('orion_admin_theme', v);
+  var meta = document.querySelector('meta[name="theme-color"]');
+  if (meta && meta.setAttribute) meta.setAttribute('content', v === 'dark' ? '#05070c' : '#ffffff');
 }
-function markTheme(t) {
-  var dots = document.querySelectorAll('.theme-dot');
-  for (var i = 0; i < dots.length; i++) dots[i].classList.toggle('sel', dots[i].getAttribute('data-t') === t);
+function toggleTheme() {
+  var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  setTheme(isDark ? 'light' : 'dark');
+  toast(isDark ? '已切换到纯白模式' : '已切换到深色模式');
 }
-function togglePop(e) { e.stopPropagation(); var p = document.getElementById('themePop'); p.style.display = p.style.display === 'none' ? 'block' : 'none'; }
-document.addEventListener('click', function(e) {
-  var p = document.getElementById('themePop');
-  if (p && !p.contains(e.target)) p.style.display = 'none';
-});
+function currentTheme() {
+  var t = document.documentElement.getAttribute('data-theme');
+  return t === 'dark' ? 'dark' : 'light';
+}
 
 // ---------- 抽屉: 桌面折叠 / 移动端浮出 ----------
 function toggleDrawer() {
-  if (window.innerWidth <= 820) document.body.classList.toggle('drawer-open');
+  if (window.innerWidth <= MOBILE_W) document.body.classList.toggle('drawer-open');
   else document.body.classList.toggle('collapsed');
+}
+function closeDrawerIfMobile() {
+  if (window.innerWidth <= MOBILE_W) document.body.classList.remove('drawer-open');
 }
 
 // ---------- 登录 ----------
@@ -563,6 +729,7 @@ function doLogin() {
 }
 function doLogout(silent) {
   TOKEN = ''; localStorage.removeItem('orion_admin_token');
+  document.body.classList.remove('authed', 'drawer-open');
   document.getElementById('app').style.display = 'none';
   document.getElementById('login').style.display = 'flex';
   if (silent !== true) toast('已退出');
@@ -575,7 +742,7 @@ function show(v) {
   var views = document.querySelectorAll('section.view');
   for (var j = 0; j < views.length; j++) views[j].classList.toggle('active', views[j].id === 'v-' + v);
   document.getElementById('pageTitle').textContent = VIEW_META[v] || '';
-  if (window.innerWidth <= 820) document.body.classList.remove('drawer-open');
+  closeDrawerIfMobile();
   if (v === 'dash') loadDashboard();
   if (v === 'grant') loadGrant();
   if (v === 'ann') loadAnnouncements();
@@ -586,6 +753,7 @@ function show(v) {
   if (v === 'audit') loadAudit();
 }
 function enterApp() {
+  document.body.classList.add('authed');
   document.getElementById('login').style.display = 'none';
   document.getElementById('app').style.display = 'block';
   show('dash');
@@ -620,7 +788,7 @@ function loadDashboard() {
 function loadGrant() {
   api('/users').then(function(r) {
     var rows = r.users || [];
-    var html = '<tr><th>邮箱</th><th>当前套餐</th><th>到期</th><th>授权操作（套餐 / 天数 / 模式）</th><th></th></tr>';
+    var html = '<tr><th>邮箱</th><th>当前套餐</th><th>到期</th><th>授权操作</th><th></th></tr>';
     if (!rows.length) html += '<tr><td colspan="5" class="empty">无用户</td></tr>';
     for (var i = 0; i < rows.length; i++) {
       var u = rows[i];
@@ -638,7 +806,7 @@ function loadGrant() {
         + '</div></td>'
         + '<td><button class="btn ' + (u.status === 'banned' ? '' : 'danger') + '" style="padding:4px 12px; font-size:12px;" onclick="setBan(\\'' + uid + '\\',' + (u.status === 'banned') + ')">' + (u.status === 'banned' ? '解封' : '封禁') + '</button></td></tr>';
     }
-    document.getElementById('grantTable').innerHTML = html;
+    renderTable('grantTable', html);
   }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
 }
 function setPlan(id) {
@@ -677,7 +845,7 @@ function loadAgentInstances() {
         + '<button class="btn ghost" style="padding:4px 10px; font-size:12px;" onclick="editAgentInstance(\\'' + esc(a.userId) + '\\')">编辑</button> '
         + '<button class="btn danger" style="padding:4px 10px; font-size:12px;" onclick="deleteAgentInstance(\\'' + esc(a.userId) + '\\')">删除</button></td></tr>';
     }
-    document.getElementById('aiTable').innerHTML = html;
+    renderTable('aiTable', html);
   }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
 }
 function saveAgentInstance() {
@@ -763,7 +931,7 @@ function loadProviders() {
         + '<button class="btn ghost" style="padding:4px 10px; font-size:12px;" onclick="toggleProvider(\\'' + esc(p.id) + '\\')">' + (p.enabled ? '停用' : '启用') + '</button> '
         + '<button class="btn danger" style="padding:4px 10px; font-size:12px;" onclick="deleteProvider(\\'' + esc(p.id) + '\\')">删除</button></td></tr>';
     }
-    document.getElementById('pvTable').innerHTML = html;
+    renderTable('pvTable', html);
   }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
 }
 function saveProvider() {
@@ -848,12 +1016,13 @@ function loadWeeklyUsage() {
         + '<td><b>' + esc(String(u.count)) + '</b></td>'
         + '<td class="dim">' + esc(u.week_start) + '</td></tr>';
     }
-    document.getElementById('pvUsageTable').innerHTML = html;
+    renderTable('pvUsageTable', html);
   }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
 }
 
 // ---------- 公告 ----------
-var editingAnnId = '';function loadAnnouncements() {
+var editingAnnId = '';
+function loadAnnouncements() {
   api('/announcements').then(function(r) {
     var rows = r.announcements || [];
     var html = '<tr><th>标题</th><th>内容</th><th>版本范围</th><th>状态</th><th>更新</th><th></th></tr>';
@@ -870,7 +1039,7 @@ var editingAnnId = '';function loadAnnouncements() {
         + '<button class="btn ghost" style="padding:4px 10px; font-size:12px;" onclick="toggleAnnouncement(\\'' + esc(a.id) + '\\')">' + (a.enabled ? '停用' : '启用') + '</button> '
         + '<button class="btn danger" style="padding:4px 10px; font-size:12px;" onclick="deleteAnnouncement(\\'' + esc(a.id) + '\\')">删除</button></td></tr>';
     }
-    document.getElementById('annTable').innerHTML = html;
+    renderTable('annTable', html);
   }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
 }
 function saveAnnouncement() {
@@ -948,7 +1117,7 @@ function loadUsers() {
         + '<button class="btn danger-soft" onclick="confirmDeleteUser(\\'' + esc(u.id) + '\\',\\'' + esc(u.email) + '\\')">删除</button>'
         + '</td></tr>';
     }
-    document.getElementById('usrTable').innerHTML = html;
+    renderTable('usrTable', html);
   }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
 }
 function setBan(id, banned) {
@@ -1032,7 +1201,7 @@ function loadUsage() {
     for (var i = 0; i < rows.length; i++) {
       html += '<tr><td>' + esc(rows[i].date || '') + '</td><td class="mono dim">' + esc(String(rows[i].user_id || '').slice(0, 14)) + '…</td><td>' + esc(rows[i].feature) + '</td><td><b>' + esc(rows[i].count) + '</b></td></tr>';
     }
-    document.getElementById('usageTable').innerHTML = html;
+    renderTable('usageTable', html);
   }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
 }
 
@@ -1045,15 +1214,19 @@ function loadAudit() {
     for (var i = 0; i < rows.length; i++) {
       html += '<tr><td class="dim">' + fmtTime(rows[i].at) + '</td><td><span class="badge used">' + esc(rows[i].action) + '</span></td><td class="mono dim">' + esc(String(rows[i].user_id || '—').slice(0, 14)) + '</td><td>' + esc(rows[i].detail || '') + '</td><td class="dim">' + esc(rows[i].ip || '') + '</td></tr>';
     }
-    document.getElementById('auditTable').innerHTML = html;
+    renderTable('auditTable', html);
   }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
 }
 
 // ---------- 启动 ----------
 (function init() {
-  var t = localStorage.getItem('orion_admin_theme') || 'aurora';
-  document.documentElement.setAttribute('data-theme', t);
-  markTheme(t);
+  // 首次访问跟随系统深浅色, 之后以用户选择为准。
+  // 兼容旧版遗留的 5 套彩色主题值(aurora/violet/...) —— 一律回落到纯白。
+  var t = localStorage.getItem('orion_admin_theme');
+  if (t !== 'dark' && t !== 'light') {
+    t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  }
+  setTheme(t);
   if (TOKEN) {
     fetch(APIBASE + '/users', {headers: {'Authorization': 'Bearer ' + TOKEN}})
       .then(function(r) { if (r.ok) enterApp(); else doLogout(true); })
@@ -1074,6 +1247,10 @@ function loadAudit() {
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape' && document.getElementById('confirm').classList.contains('show')) {
       closeConfirm();
+    }
+    // 移动端抽屉: ESC 关闭
+    if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) {
+      document.body.classList.remove('drawer-open');
     }
   });
 })();

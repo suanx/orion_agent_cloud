@@ -76,10 +76,46 @@ for (const [table, cols] of Object.entries(COLUMNS)) {
 }
 
 // users.username 的唯一索引（新库由 schema.sql 的 UNIQUE 直接建好）。
-// 允许多个 NULL：老用户在首次登录时才回填账号名。
 await db.execute(
   "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)"
 );
 console.log("  索引 idx_users_username 已就绪");
+
+// ---- 回填老用户账号名（2026-10-09）----
+// 原设计是「老用户首次登录时才回填」，结果管理台账号名列对所有老用户
+// 都显示 "—"（生产库实测：列补上后 username 全为 NULL）。迁移时一次性
+// 补齐，让账号名立刻可见。生成逻辑与 src/utils/register-policy.ts 的
+// generateUsername 保持一致（agent- + 5 位随机数字，查库避让撞号）。
+{
+  const pending = await db.execute(
+    "SELECT id FROM users WHERE username IS NULL OR username = ''"
+  );
+  if (pending.rows.length > 0) {
+    const used = new Set(
+      (
+        await db.execute(
+          "SELECT username FROM users WHERE username IS NOT NULL AND username != ''"
+        )
+      ).rows.map((r) => String(r.username))
+    );
+    const gen = () => {
+      const buf = new Uint32Array(1);
+      crypto.getRandomValues(buf);
+      return `agent-${String(buf[0] % 100000).padStart(5, "0")}`;
+    };
+    let done = 0;
+    for (const row of pending.rows) {
+      let name = gen();
+      for (let i = 0; i < 12 && used.has(name); i++) name = gen();
+      used.add(name);
+      await db.execute({
+        sql: "UPDATE users SET username = ? WHERE id = ?",
+        args: [name, row.id],
+      });
+      done++;
+    }
+    console.log(`  回填 ${done} 个账号名`);
+  }
+}
 
 console.log("现有表:", check.rows.map((r) => r.name).join(", "));

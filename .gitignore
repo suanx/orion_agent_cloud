@@ -10,3 +10,4 @@ local.db
 local-dev.db
 .dev/
 local-dev*.db
+live_admin.html
