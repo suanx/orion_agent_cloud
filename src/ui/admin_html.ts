@@ -450,9 +450,9 @@ function loadGrant() {
         + '<input id="gd-' + uid + '" type="number" value="30" min="1" style="width:74px; padding:6px 8px; font-size:13px;" title="天数">'
         + '<select id="gm-' + uid + '" style="width:88px; padding:6px 8px; font-size:13px;">'
         + '<option value="set">设置</option><option value="extend">顺延</option></select>'
-        + '<button class="btn" style="padding:6px 14px; font-size:12px;" onclick="setPlan(\'' + uid + '\')">应用</button>'
+        + '<button class="btn" style="padding:6px 14px; font-size:12px;" onclick="setPlan(\\'' + uid + '\\')">应用</button>'
         + '</div></td>'
-        + '<td><button class="btn ' + (u.status === 'banned' ? '' : 'danger') + '" style="padding:4px 12px; font-size:12px;" onclick="setBan(\'' + uid + '\',' + (u.status === 'banned') + ')">' + (u.status === 'banned' ? '解封' : '封禁') + '</button></td></tr>';
+        + '<td><button class="btn ' + (u.status === 'banned' ? '' : 'danger') + '" style="padding:4px 12px; font-size:12px;" onclick="setBan(\\'' + uid + '\\',' + (u.status === 'banned') + ')">' + (u.status === 'banned' ? '解封' : '封禁') + '</button></td></tr>';
     }
     document.getElementById('grantTable').innerHTML = html;
   }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
@@ -483,9 +483,9 @@ function loadAnnouncements() {
         + '<td><span class="badge ' + (a.enabled ? 'unused' : 'revoked') + '">' + (a.enabled ? '启用中' : '已停用') + '</span></td>'
         + '<td class="dim">' + fmtTime(a.updated_at) + '</td>'
         + '<td style="white-space:nowrap;">'
-        + '<button class="btn ghost" style="padding:4px 10px; font-size:12px;" onclick="editAnnouncement(\'' + esc(a.id) + '\')">编辑</button> '
-        + '<button class="btn ghost" style="padding:4px 10px; font-size:12px;" onclick="toggleAnnouncement(\'' + esc(a.id) + '\')">' + (a.enabled ? '停用' : '启用') + '</button> '
-        + '<button class="btn danger" style="padding:4px 10px; font-size:12px;" onclick="deleteAnnouncement(\'' + esc(a.id) + '\')">删除</button></td></tr>';
+        + '<button class="btn ghost" style="padding:4px 10px; font-size:12px;" onclick="editAnnouncement(\\'' + esc(a.id) + '\\')">编辑</button> '
+        + '<button class="btn ghost" style="padding:4px 10px; font-size:12px;" onclick="toggleAnnouncement(\\'' + esc(a.id) + '\\')">' + (a.enabled ? '停用' : '启用') + '</button> '
+        + '<button class="btn danger" style="padding:4px 10px; font-size:12px;" onclick="deleteAnnouncement(\\'' + esc(a.id) + '\\')">删除</button></td></tr>';
     }
     document.getElementById('annTable').innerHTML = html;
   }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
