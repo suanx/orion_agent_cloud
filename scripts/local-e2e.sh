@@ -155,13 +155,161 @@ SYNISO=$(curl -s "$BASE/api/sync/pull?since=0" -H "Authorization: Bearer $ATB" |
 ST2=$(curl -s $BASE/api/sync/stats -H "Authorization: Bearer $ATB")
 echo "$ST2" | python -c "import json,sys; d=json.load(sys.stdin); assert d['rows']==0 and d['rowLimit']==2000" 2>/dev/null && ok "B 的同步统计为空(free 2000 行上限)" || bad "统计异常: $(echo $ST2 | head -c 120)"
 
-echo "== 13. 清理与幂等 =="
+echo "== 13. AI 供应商与云端额度 =="
+# 注意: 前面的授权用例已把 alice 升为 pro, 因此这里用一个全新注册的
+# 免费账号验证免费档, 避免依赖执行顺序。
+CAROL="${CAROL:-carol_$(date +%s%N)@local.dev}"
+CREG=$(curl -s -X POST -H "Content-Type: application/json" -d "{\"email\":\"$CAROL\",\"password\":\"Test12345!\",\"deviceId\":\"dev-carol-1\"}" $BASE/api/auth/register)
+CAT=$(echo "$CREG" | python -c "import json,sys; print(json.load(sys.stdin).get('accessToken',''))" 2>/dev/null)
+[ -n "$CAT" ] || bad "免费档测试账号注册失败"
+# 13.1 未配置供应商时 /ai/providers 返回 available:false 而不是报错
+NOPROV=$(curl -s $BASE/api/ai/providers -H "Authorization: Bearer $CAT")
+echo "$NOPROV" | python -c "import json,sys; d=json.load(sys.stdin); assert d['available'] is False and d['providers']==[]" 2>/dev/null \
+  && ok "未配置供应商: available=false" || bad "providers 异常: $(echo $NOPROV | head -c 120)"
+USG=$(curl -s $BASE/api/ai/usage -H "Authorization: Bearer $CAT")
+echo "$USG" | python -c "
+import json,sys,datetime
+d=json.load(sys.stdin)
+assert d['tier']=='free' and d['tierLabel']=='免费版', d
+assert d['limit']==100 and d['used']==0 and d['remaining']==100, d
+assert 0 < d['resetInMs'] <= 7*24*3600*1000, d
+assert datetime.date.fromisoformat(d['weekStart']).weekday()==0, ('weekStart 必须是周一', d)
+" 2>/dev/null && ok "免费版周额度 100, weekStart 为周一" || bad "额度异常: $(echo $USG | head -c 160)"
+ST=$(curl -s $BASE/api/license/status -H "Authorization: Bearer $CAT")
+echo "$ST" | python -c "
+import json,sys
+d=json.load(sys.stdin); q=d.get('aiQuota')
+assert q and q['tier']=='free' and q['limit']==100 and q['remaining']==100, d
+" 2>/dev/null && ok "license/status 携带 aiQuota" || bad "aiQuota 缺失: $(echo $ST | head -c 160)"
+CHAT0=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $CAT" -H "Content-Type: application/json" -d '{"messages":[{"role":"user","content":"hi"}]}' $BASE/api/ai/chat)
+check "无供应商时 chat 报错(500)" 500 "$CHAT0"
+USG2=$(curl -s $BASE/api/ai/usage -H "Authorization: Bearer $CAT" | python -c "import json,sys; print(json.load(sys.stdin)['used'])")
+[ "$USG2" = "1" ] && ok "失败请求已扣额度(先扣后转策略)" || bad "额度未扣: $USG2"
+UNA=$(curl -s -o /dev/null -w '%{http_code}' $BASE/api/ai/usage)
+check "未鉴权查额度被拒(401)" 401 "$UNA"
+UNA2=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" -d '{"messages":[{"role":"user","content":"hi"}]}' $BASE/api/ai/chat)
+check "未鉴权调模型被拒(401)" 401 "$UNA2"
+
+# 13.2 管理台创建供应商
+CREATE=$(curl -s -X POST -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
+  -d '{"name":"e2e中转","baseUrl":"https://api.e2e.invalid/v1","apiKey":"sk-e2e-secret-key","models":[{"name":"m-fast","label":"快模型","contextWindow":128000},{"name":"m-emb","kind":"embedding"}],"enabled":true,"sort":0}' \
+  $BASE/api/admin/providers)
+PV=$(echo "$CREATE" | python -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+[ -n "$PV" ] && ok "管理台创建供应商" || bad "创建失败: $(echo $CREATE | head -c 160)"
+LIST=$(curl -s $BASE/api/admin/providers -H "Authorization: Bearer $ADMIN")
+echo "$LIST" | python -c "
+import json,sys
+raw=sys.stdin.read()
+assert 'sk-e2e-secret-key' not in raw, 'Key 泄露!'
+assert 'api_key_enc' not in raw, '密文字段泄露!'
+d=json.loads(raw); p=d['providers'][0]
+assert p['name']=='e2e中转' and len(p['models'])==2
+" 2>/dev/null && ok "供应商列表不泄露 Key" || bad "列表泄露或结构错: $(echo $LIST | head -c 200)"
+NOKEY=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" -d '{"name":"x","baseUrl":"https://a.com/v1","models":[{"name":"m"}]}' $BASE/api/admin/providers)
+check "新建缺 Key 被拒(400)" 400 "$NOKEY"
+NOMODEL=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" -d '{"name":"x","baseUrl":"https://a.com/v1","apiKey":"k","models":[]}' $BASE/api/admin/providers)
+check "空模型列表被拒(400)" 400 "$NOMODEL"
+BADURL=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" -d '{"name":"x","baseUrl":"api.a.com","apiKey":"k","models":[{"name":"m"}]}' $BASE/api/admin/providers)
+check "非法 base_url 被拒(400)" 400 "$BADURL"
+
+# 13.3 App 侧下发: chatUrl 指向本站中继, 不含上游地址与 Key
+APROV=$(curl -s $BASE/api/ai/providers -H "Authorization: Bearer $CAT")
+echo "$APROV" | python -c "
+import json,sys
+raw=sys.stdin.read()
+assert 'api.e2e.invalid' not in raw, '上游地址泄露给 App!'
+d=json.loads(raw); assert d['available'] is True
+p=d['providers'][0]
+assert p['chatUrl'].endswith('/api/ai/chat'), p
+assert [m['name'] for m in p['models']]==['m-fast','m-emb'], p
+" 2>/dev/null && ok "App 拉到供应商(chatUrl 指向中继)" || bad "供应商下发异常: $(echo $APROV | head -c 200)"
+
+# 13.4 上游不可达 → 502, 额度照扣
+CHATUP=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $CAT" -H "Content-Type: application/json" -d '{"messages":[{"role":"user","content":"hi"}]}' $BASE/api/ai/chat)
+check "上游不可达返回 502" 502 "$CHATUP"
+USG3=$(curl -s $BASE/api/ai/usage -H "Authorization: Bearer $CAT" | python -c "import json,sys; print(json.load(sys.stdin)['used'])")
+[ "$USG3" = "2" ] && ok "上游失败仍扣额度(累计 2)" || bad "额度计数异常: $USG3"
+
+# 13.5 升档 pro → 上限 1000, 用量保留不清零
+AUID=$(curl -s $BASE/api/admin/users -H "Authorization: Bearer $ADMIN" | python -c "
+import json,sys
+for u in json.load(sys.stdin)['users']:
+    if u['email'].startswith('alice_'): print(u['id']); break
+")
+CAUID=$(curl -s $BASE/api/admin/users -H "Authorization: Bearer $ADMIN" | python -c "
+import json,sys
+for u in json.load(sys.stdin)['users']:
+    if u['email'].startswith('carol_'): print(u['id']); break
+")
+curl -s -X POST -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
+  -d '{"plan":"pro","durationDays":30,"mode":"set"}' $BASE/api/admin/users/$CAUID/plan > /dev/null
+USG4=$(curl -s $BASE/api/ai/usage -H "Authorization: Bearer $CAT")
+echo "$USG4" | python -c "
+import json,sys
+d=json.load(sys.stdin)
+assert d['tier']=='pro' and d['tierLabel']=='专业版', d
+assert d['limit']==1000, d
+assert d['used']==2, '用量应保留不因升档清零'
+" 2>/dev/null && ok "升专业版: 上限 1000 且用量保留" || bad "升档后额度异常: $(echo $USG4 | head -c 160)"
+
+# 13.6 额度耗尽 → 429
+node -e "
+(async()=>{
+  const {createClient}=require('@libsql/client');
+  const c=createClient({url:'file:./local-dev-ai.db'});
+  await c.execute({sql:'UPDATE usage_weekly SET count = 1000 WHERE feature = ?',args:['ai_chat']});
+})();
+" 2>/dev/null
+EXH=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $CAT" -H "Content-Type: application/json" -d '{"messages":[{"role":"user","content":"hi"}]}' $BASE/api/ai/chat)
+check "额度耗尽返回 429" 429 "$EXH"
+EXHB=$(curl -s $BASE/api/ai/usage -H "Authorization: Bearer $CAT" | python -c "import json,sys; d=json.load(sys.stdin); print(d['remaining'])")
+[ "$EXHB" = "0" ] && ok "耗尽时 remaining=0" || bad "remaining 未归零: $EXHB"
+
+# 13.7 跨周自动归零（把本周行挪到上周, 无需定时任务）
+node -e "
+(async()=>{
+  const {createClient}=require('@libsql/client');
+  const c=createClient({url:'file:./local-dev-ai.db'});
+  await c.execute({sql:'UPDATE usage_weekly SET week_start = ? WHERE feature = ?',args:['2000-01-03','ai_chat']});
+})();
+" 2>/dev/null
+NEWUSG=$(curl -s $BASE/api/ai/usage -H "Authorization: Bearer $CAT")
+echo "$NEWUSG" | python -c "
+import json,sys,datetime
+d=json.load(sys.stdin)
+assert d['used']==0, ('跨周应自动归零', d)
+assert d['remaining']==d['limit'], d
+assert datetime.date.fromisoformat(d['weekStart']).weekday()==0
+" 2>/dev/null && ok "跨周自动归零(无需定时任务)" || bad "跨周未重置: $(echo $NEWUSG | head -c 160)"
+
+# 13.8 停用后 App 不再看到
+curl -s -X POST -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
+  -d "{\"id\":\"$PV\",\"name\":\"e2e中转\",\"baseUrl\":\"https://api.e2e.invalid/v1\",\"apiKey\":\"\",\"models\":[{\"name\":\"m-fast\"}],\"enabled\":false,\"sort\":0}" \
+  $BASE/api/admin/providers > /dev/null
+DIS=$(curl -s $BASE/api/ai/providers -H "Authorization: Bearer $CAT" | python -c "import json,sys; print(str(json.load(sys.stdin)['available']).lower())")
+[ "$DIS" = "false" ] && ok "停用后 App 侧 available=false" || bad "停用未生效: $DIS"
+
+# 13.9 删除供应商
+curl -s -X DELETE -H "Authorization: Bearer $ADMIN" $BASE/api/admin/providers/$PV > /dev/null
+EMPTY=$(curl -s $BASE/api/admin/providers -H "Authorization: Bearer $ADMIN" | python -c "import json,sys; print(len(json.load(sys.stdin)['providers']))")
+[ "$EMPTY" = "0" ] && ok "删除供应商" || bad "删除失败: 剩 $EMPTY 个"
+
+echo "== 14. 清理与幂等 =="
 DELR=$(curl -s -X DELETE -H "Authorization: Bearer $AT2" "$BASE/api/sync/rows?table=sessions" )
 echo "$DELR" | python -c "import json,sys; assert json.load(sys.stdin)['ok']" 2>/dev/null && ok "删除某表同步数据" || bad "删除表失败"
 DELB=$(curl -s -X DELETE -H "Authorization: Bearer $AT2" "$BASE/api/backup/sessions")
 echo "$DELB" | python -c "import json,sys; assert json.load(sys.stdin)['bytes']>=0" 2>/dev/null && ok "删除备份快照" || bad "删除备份失败"
 DELALL=$(curl -s -X DELETE -H "Authorization: Bearer $ATB" $BASE/api/backup)
 echo "$DELALL" | python -c "import json,sys; assert json.load(sys.stdin)['bytes']==0" 2>/dev/null && ok "清空备份(幂等)" || bad "清空失败"
+
+# 清掉 e2e 造的周用量行, 保证脚本可对同一库重复运行
+node -e "
+(async()=>{
+  const {createClient}=require('@libsql/client');
+  const c=createClient({url:'file:./local-dev-ai.db'});
+  await c.execute({sql:'DELETE FROM usage_weekly'});
+})();
+" 2>/dev/null
 
 echo ""
 echo "======================================"

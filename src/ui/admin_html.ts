@@ -215,6 +215,9 @@ section.view.active { display:block; }
   <button class="nav-item" data-v="grant" onclick="show('grant')"><svg class="ic" aria-hidden="true"><use href="#i-key"></use></svg> 账号授权</button>
   <button class="nav-item" data-v="ann" onclick="show('ann')"><svg class="ic" aria-hidden="true"><use href="#i-mega"></use></svg> 公告管理</button>
 
+  <div class="grp">AI 模型</div>
+  <button class="nav-item" data-v="prov" onclick="show('prov')"><svg class="ic" aria-hidden="true"><use href="#i-diamond"></use></svg> 供应商配置</button>
+
   <div class="grp">用户管理</div>
   <button class="nav-item" data-v="usr" onclick="show('usr')"><svg class="ic" aria-hidden="true"><use href="#i-users"></use></svg> 用户列表</button>
 
@@ -317,6 +320,41 @@ section.view.active { display:block; }
       <div class="scroll-x"><table id="annTable"></table></div>
     </div>
   </section>
+
+  <section id="v-prov" class="view">
+    <div class="panel glass">
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-diamond"></use></svg> 新建/编辑 AI 模型供应商</h2>
+      <div class="row">
+        <input id="pvName" placeholder="展示名，如 官方中转" style="flex:1; min-width:180px;">
+        <input id="pvBase" placeholder="上游根地址，如 https://api.example.com/v1" style="flex:2; min-width:260px;">
+      </div>
+      <div class="row">
+        <input id="pvKey" type="password" placeholder="API Key（编辑时留空 = 不改动已有 Key）" style="flex:1; min-width:220px;">
+        <input id="pvSort" type="number" placeholder="排序（小的优先）" style="width:150px;" value="0">
+      </div>
+      <div class="row">
+        <textarea id="pvModels" rows="4" placeholder='模型列表(JSON 数组)，如 [{"name":"gpt-4o-mini","label":"GPT-4o mini","contextWindow":128000}]' style="width:100%; min-width:220px;"></textarea>
+      </div>
+      <div class="row">
+        <button class="btn" onclick="saveProvider()">保存</button>
+        <button class="btn ghost" onclick="resetProviderForm()">清空表单</button>
+        <label style="font-size:13px; display:flex; align-items:center; gap:5px;"><input type="checkbox" id="pvEnabled" checked style="width:auto;"> 启用（停用后 App 端不再显示云端模型）</label>
+        <span class="dim" id="pvEditing" style="font-size:12px;"></span>
+      </div>
+      <p class="dim" style="font-size:12px; margin:10px 0 0;">
+        API Key 用 JWT_SECRET 派生密钥加密后存库，永不回传给 App；更换 JWT_SECRET 会导致已存 Key 无法解密，需重新录入。<br>
+        计费口径：一轮对话 = 一次请求（无论该轮工具调用多少次），消耗 1 点周额度。额度每周一 00:00（UTC+8）自动归零。
+      </p>
+    </div>
+    <div class="panel glass">
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-list"></use></svg> 已配置供应商 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadProviders()">刷新</button></h2>
+      <div class="scroll-x"><table id="pvTable"></table></div>
+    </div>
+    <div class="panel glass">
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-chart"></use></svg> 本周云端额度用量 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadWeeklyUsage()">刷新</button></h2>
+      <div class="scroll-x"><table id="pvUsageTable"></table></div>
+    </div>
+  </section>
  </div>
 </div>
 <div id="toast"></div>
@@ -325,7 +363,7 @@ section.view.active { display:block; }
 // EdgeOne 部署时函数挂在 /api/* 下(前缀 /api); 本地 dev 直接是根路径。
 var APIBASE = (location.pathname.indexOf('/api') === 0 ? '/api' : '') + '/admin';
 var TOKEN = localStorage.getItem('orion_admin_token') || '';
-var VIEW_META = { dash:'首页', grant:'账号授权', ann:'公告管理', usr:'用户列表', usage:'用量统计', audit:'审计日志' };
+var VIEW_META = { dash:'首页', grant:'账号授权', ann:'公告管理', prov:'供应商配置', usr:'用户列表', usage:'用量统计', audit:'审计日志' };
 
 function api(path, opts) {
   opts = opts || {};
@@ -397,6 +435,7 @@ function show(v) {
   if (v === 'dash') loadDashboard();
   if (v === 'grant') loadGrant();
   if (v === 'ann') loadAnnouncements();
+  if (v === 'prov') { loadProviders(); loadWeeklyUsage(); }
   if (v === 'usr') loadUsers();
   if (v === 'usage') loadUsage();
   if (v === 'audit') loadAudit();
@@ -468,9 +507,140 @@ function setPlan(id) {
   }).catch(function(e) { toast('授权失败: ' + e.message); });
 }
 
+// ---------- AI 模型供应商 ----------
+var editingProviderId = '';
+function resetProviderForm() {
+  editingProviderId = '';
+  document.getElementById('pvName').value = '';
+  document.getElementById('pvBase').value = '';
+  document.getElementById('pvKey').value = '';
+  document.getElementById('pvSort').value = '0';
+  document.getElementById('pvModels').value = '';
+  document.getElementById('pvEnabled').checked = true;
+  document.getElementById('pvEditing').textContent = '';
+}
+function parseModelsInput(raw) {
+  var s = (raw || '').trim();
+  if (!s) return [];
+  var parsed = JSON.parse(s);          // 语法错会抛, 由调用方 catch
+  if (!Array.isArray(parsed)) throw new Error('模型列表必须是 JSON 数组');
+  for (var i = 0; i < parsed.length; i++) {
+    if (!parsed[i] || !parsed[i].name) throw new Error('第 ' + (i + 1) + ' 个模型缺少 name 字段');
+  }
+  return parsed;
+}
+function loadProviders() {
+  api('/providers').then(function(r) {
+    var rows = r.providers || [];
+    var html = '<tr><th>名称</th><th>上游地址</th><th>模型</th><th>Key</th><th>排序</th><th>状态</th><th></th></tr>';
+    if (!rows.length) html += '<tr><td colspan="7" class="empty">暂无供应商 —— App 端不会显示云端模型</td></tr>';
+    for (var i = 0; i < rows.length; i++) {
+      var p = rows[i];
+      var ms = p.models || [];
+      var names = [];
+      for (var j = 0; j < ms.length; j++) names.push(ms[j].label || ms[j].name);
+      html += '<tr><td><b>' + esc(p.name) + '</b></td>'
+        + '<td class="dim" style="max-width:280px;">' + esc(p.baseUrl) + '</td>'
+        + '<td class="dim" style="max-width:260px;">' + esc(names.join(', ') || '—') + '</td>'
+        + '<td class="dim">' + esc(p.keyState || '已配置') + '</td>'
+        + '<td class="dim">' + esc(String(p.sort)) + '</td>'
+        + '<td><span class="badge ' + (p.enabled ? 'unused' : 'revoked') + '">' + (p.enabled ? '启用中' : '已停用') + '</span></td>'
+        + '<td style="white-space:nowrap;">'
+        + '<button class="btn ghost" style="padding:4px 10px; font-size:12px;" onclick="editProvider(\\'' + esc(p.id) + '\\')">编辑</button> '
+        + '<button class="btn ghost" style="padding:4px 10px; font-size:12px;" onclick="toggleProvider(\\'' + esc(p.id) + '\\')">' + (p.enabled ? '停用' : '启用') + '</button> '
+        + '<button class="btn danger" style="padding:4px 10px; font-size:12px;" onclick="deleteProvider(\\'' + esc(p.id) + '\\')">删除</button></td></tr>';
+    }
+    document.getElementById('pvTable').innerHTML = html;
+  }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
+}
+function saveProvider() {
+  var body = {
+    name: document.getElementById('pvName').value.trim(),
+    baseUrl: document.getElementById('pvBase').value.trim(),
+    apiKey: document.getElementById('pvKey').value.trim(),
+    sort: Number(document.getElementById('pvSort').value) || 0,
+    enabled: document.getElementById('pvEnabled').checked
+  };
+  if (!body.name || !body.baseUrl) { toast('名称与上游地址不能为空'); return; }
+  if (!editingProviderId && !body.apiKey) { toast('新建时 API Key 不能为空'); return; }
+  try {
+    body.models = parseModelsInput(document.getElementById('pvModels').value);
+  } catch (e) {
+    toast('模型列表格式错误: ' + e.message); return;
+  }
+  if (!body.models.length) { toast('至少配置一个模型'); return; }
+  if (editingProviderId) body.id = editingProviderId;
+  api('/providers', {method:'POST', body: body}).then(function() {
+    toast(editingProviderId ? '供应商已更新' : '供应商已创建');
+    resetProviderForm(); loadProviders();
+  }).catch(function(e) { toast('保存失败: ' + e.message); });
+}
+function editProvider(id) {
+  api('/providers').then(function(r) {
+    var rows = r.providers || [];
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].id === id) {
+        editingProviderId = id;
+        document.getElementById('pvName').value = rows[i].name;
+        document.getElementById('pvBase').value = rows[i].baseUrl;
+        // Key 不回显, 留空表示不改动
+        document.getElementById('pvKey').value = '';
+        document.getElementById('pvSort').value = String(rows[i].sort);
+        document.getElementById('pvModels').value = JSON.stringify(rows[i].models || [], null, 2);
+        document.getElementById('pvEnabled').checked = !!rows[i].enabled;
+        document.getElementById('pvEditing').textContent = '正在编辑: ' + rows[i].name + '（Key 留空即不改动）';
+        window.scrollTo(0, 0);
+        return;
+      }
+    }
+  }).catch(function(e) { toast('加载失败: ' + e.message); });
+}
+function toggleProvider(id) {
+  api('/providers').then(function(r) {
+    var rows = r.providers || [];
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].id !== id) continue;
+      var body = {
+        id: id,
+        name: rows[i].name,
+        baseUrl: rows[i].baseUrl,
+        apiKey: '',                 // 不改动已有 Key
+        models: rows[i].models || [],
+        enabled: !rows[i].enabled,
+        sort: rows[i].sort
+      };
+      return api('/providers', {method:'POST', body: body}).then(function() {
+        toast(body.enabled ? '已启用' : '已停用'); loadProviders();
+      }).catch(function(e) { toast('操作失败: ' + e.message); });
+    }
+  }).catch(function(e) { toast('加载失败: ' + e.message); });
+}
+function deleteProvider(id) {
+  if (!window.confirm('确认删除该供应商？App 端将不再显示其云端模型。')) return;
+  api('/providers/' + encodeURIComponent(id), {method:'DELETE'}).then(function() {
+    toast('已删除');
+    if (editingProviderId === id) resetProviderForm();
+    loadProviders();
+  }).catch(function(e) { toast('删除失败: ' + e.message); });
+}
+function loadWeeklyUsage() {
+  api('/weekly-usage').then(function(r) {
+    var rows = r.usage || [];
+    var html = '<tr><th>用户</th><th>功能</th><th>本周用量</th><th>周起始</th></tr>';
+    if (!rows.length) html += '<tr><td colspan="4" class="empty">本周暂无用量</td></tr>';
+    for (var i = 0; i < rows.length; i++) {
+      var u = rows[i];
+      html += '<tr><td class="dim">' + esc(u.user_id) + '</td>'
+        + '<td>' + esc(u.feature) + '</td>'
+        + '<td><b>' + esc(String(u.count)) + '</b></td>'
+        + '<td class="dim">' + esc(u.week_start) + '</td></tr>';
+    }
+    document.getElementById('pvUsageTable').innerHTML = html;
+  }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
+}
+
 // ---------- 公告 ----------
-var editingAnnId = '';
-function loadAnnouncements() {
+var editingAnnId = '';function loadAnnouncements() {
   api('/announcements').then(function(r) {
     var rows = r.announcements || [];
     var html = '<tr><th>标题</th><th>内容</th><th>版本范围</th><th>状态</th><th>更新</th><th></th></tr>';

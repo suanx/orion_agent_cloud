@@ -5,6 +5,13 @@ import { nowMs } from "../utils/crypto";
 import { requireAdmin } from "../middleware/auth";
 import { applyPlanGrant, validateAccountPlan } from "../services/account_plans";
 import { audit } from "../services/audit";
+import { weekStartDate } from "../plans";
+import {
+  createProvider,
+  deleteProvider,
+  listProviders,
+  updateProvider,
+} from "../services/ai_providers";
 
 export const adminRoutes = new Hono<Env>();
 
@@ -175,4 +182,70 @@ adminRoutes.get("/audit", async (c) => {
     sql: "SELECT user_id, action, detail, ip, at FROM audit_log ORDER BY at DESC LIMIT 500",
   });
   return c.json({ audit: r.rows });
+});
+
+// ---- AI 模型供应商（上游 Key 加密存储, 永不回传明文）----
+
+// ---- GET /admin/providers ----
+// 列表里刻意不含 api_key_enc：管理台只需知道"配了哪家、有哪些模型、
+// 启没启用"，改 Key 走编辑表单提交。
+adminRoutes.get("/providers", async (c) => {
+  const db = c.get("db");
+  const rows = await listProviders(db);
+  return c.json({
+    providers: rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      baseUrl: r.base_url,
+      models: JSON.parse(r.models || "[]"),
+      enabled: !!r.enabled,
+      sort: r.sort,
+      // 只给"已配置"这一事实, 不泄露任何 Key 片段
+      keyState: "已配置",
+    })),
+  });
+});
+
+// ---- POST /admin/providers（新建; 带 id 为更新, apiKey 空则不改动已有 Key）----
+adminRoutes.post("/providers", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const input = {
+    name: String(body.name ?? ""),
+    baseUrl: String(body.baseUrl ?? ""),
+    apiKey: String(body.apiKey ?? ""),
+    models: Array.isArray(body.models) ? body.models : [],
+    enabled: body.enabled !== false,
+    sort: Number(body.sort) || 0,
+  };
+  const db = c.get("db");
+  if (body.id) {
+    const id = String(body.id);
+    await updateProvider(db, c.env.JWT_SECRET, id, input);
+    await audit(db, null, "provider_update", id, input.name);
+    return c.json({ ok: true, id });
+  }
+  const id = await createProvider(db, c.env.JWT_SECRET, input);
+  await audit(db, null, "provider_create", id, input.name);
+  return c.json({ ok: true, id });
+});
+
+// ---- DELETE /admin/providers/:id ----
+adminRoutes.delete("/providers/:id", async (c) => {
+  const id = c.req.param("id");
+  await deleteProvider(c.get("db"), id);
+  await audit(c.get("db"), null, "provider_delete", id, "");
+  return c.json({ ok: true });
+});
+
+// ---- GET /admin/weekly-usage ----
+// 本周额度总览：谁用了多少, 用于判断要不要给账号升档。
+adminRoutes.get("/weekly-usage", async (c) => {
+  const db = c.get("db");
+  const week = weekStartDate();
+  const r = await db.execute({
+    sql: `SELECT user_id, week_start, feature, count FROM usage_weekly
+          WHERE week_start = ? ORDER BY count DESC LIMIT 500`,
+    args: [week],
+  });
+  return c.json({ weekStart: week, usage: r.rows });
 });

@@ -16,6 +16,9 @@ export interface Bindings {
   CLOUD_LLM_API_KEY?: string;
   CLOUD_LLM_MODEL?: string;
 
+  /** 站点对外地址(如 https://orion.suen.us.ci)。App 端拼云端模型 chatUrl 时用。 */
+  PUBLIC_BASE_URL?: string;
+
   UPDATE_LATEST_VERSION?: string;
   UPDATE_MIN_VERSION?: string;
   UPDATE_FORCE_UPDATE?: string; // 'true' 时本次更新为强制更新(默认普通更新)

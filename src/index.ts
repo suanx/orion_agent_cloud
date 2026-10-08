@@ -12,6 +12,7 @@ import { backupRoutes } from "./routes/backup";
 import { syncRoutes } from "./routes/sync";
 import { mcpRoutes } from "./routes/mcp";
 import { adminRoutes } from "./routes/admin";
+import { aiRoutes } from "./routes/ai";
 import { adminHtml } from "./ui/admin_html";
 import { requireAuth } from "./middleware/auth";
 
@@ -59,6 +60,7 @@ app.route("/announcement", announcementRoutes);
 app.route("/backup", backupRoutes);
 app.route("/sync", syncRoutes);
 app.route("/mcp", mcpRoutes);
+app.route("/ai", aiRoutes);
 app.route("/admin", adminRoutes);
 
 // 健康检查(带鉴权, 验证整条链路: JWT -> Turso)

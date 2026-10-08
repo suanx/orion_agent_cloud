@@ -60,6 +60,34 @@ CREATE TABLE IF NOT EXISTS usage_daily (
   PRIMARY KEY (user_id, date, feature)
 );
 
+-- ============ 周额度（AI 对话等重资源功能, 每周一 00:00 UTC+8 自动归零）============
+
+-- 用「周起始日」作为主键的一部分, 跨周自然落到新行 = 自动重置,
+-- 不需要定时任务去清零(定时任务在边缘函数里并不可靠, 进程可能不常驻)。
+CREATE TABLE IF NOT EXISTS usage_weekly (
+  user_id   TEXT NOT NULL,
+  week_start TEXT NOT NULL,                      -- UTC+8 周一日期 YYYY-MM-DD
+  feature   TEXT NOT NULL,                       -- ai_chat
+  count     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, week_start, feature)
+);
+
+-- ============ AI 模型供应商（后端持 Key, App 端不接触上游密钥）============
+
+-- 一行 = 一个上游 OpenAI 兼容服务。api_key 存密文(见 services/ai_providers.ts 的
+-- 加密口径), 绝不回传给 App; App 只拿到 id/名称/模型列表, 请求打 /api/ai/chat。
+CREATE TABLE IF NOT EXISTS llm_providers (
+  id           TEXT PRIMARY KEY,                  -- p_<uuid>
+  name         TEXT NOT NULL,                     -- 展示名, 如「官方中转」
+  base_url     TEXT NOT NULL,                     -- 上游根, 如 https://api.x.com/v1
+  api_key_enc  TEXT NOT NULL,                     -- AES-GCM 密文(p_<keyId> 派生)
+  models       TEXT NOT NULL DEFAULT '[]',        -- JSON 数组: [{name,label,kind,...}]
+  enabled      INTEGER NOT NULL DEFAULT 1,
+  sort         INTEGER NOT NULL DEFAULT 0,        -- 越小越靠前
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+
 -- ============ 云端定时任务 ============
 
 CREATE TABLE IF NOT EXISTS cloud_tasks (
