@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Client } from "@libsql/client";
 import type { Context } from "hono";
 import type { Env } from "../env";
 import { ApiError, errors } from "../utils/errors";
@@ -13,6 +14,7 @@ import {
   getInstance,
 } from "../services/agent_instances";
 import { convertStream } from "../services/agent_stream";
+import { consumeWeeklyQuota } from "../services/quota";
 
 export const agentRoutes = new Hono<Env>();
 
@@ -48,6 +50,8 @@ agentRoutes.post("/chat", requireAuth, async (c) => {
 
   let body: {
     model?: string;
+    /** Agent 实例侧的模型 id（用户自部署实例可选的模型列表）。 */
+    modelId?: string;
     messages?: { role?: string; content?: string }[];
     appSessionId?: string;
   };
@@ -65,6 +69,11 @@ agentRoutes.post("/chat", requireAuth, async (c) => {
   const appSessionId = String(body.appSessionId ?? "").trim();
   const mapped = appSessionId ? await getAgentSession(db, user.userId, appSessionId) : null;
 
+  // 先扣周配额（超限直接 429，App 能明确提示「本周额度已用尽」）。
+  // Agent 单次消耗的算力远高于普通对话，故用独立的 agent_run 计数，
+  // 不与 ai_chat 混算——否则一次 Agent 任务会吃掉几十轮对话的额度。
+  const quota = await consumeWeeklyQuota(db, user.userId, user.plan, "agent_run");
+
   const apiKey = await decryptSecret(c.env.JWT_SECRET, instance.api_key_enc);
   const remoteBase = instance.base_url.replace(/\/+$/, "");
 
@@ -75,6 +84,11 @@ agentRoutes.post("/chat", requireAuth, async (c) => {
     payload.sessionId = mapped.remote_session;
     payload.chatId = mapped.remote_chat;
   }
+  // 模型由 App 侧选择（用户在模型选择器里挑）。留空时 Agent 用自己的
+  // 默认模型，故不做白名单校验——实例是用户自己的，可选模型本就该由
+  // 该实例的部署方决定，后端无权替他收紧。
+  const requestedModel = typeof body.modelId === "string" ? body.modelId.trim() : "";
+  if (requestedModel) payload.modelId = requestedModel;
 
   let resp: Response;
   try {
@@ -127,6 +141,9 @@ agentRoutes.post("/chat", requireAuth, async (c) => {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-cache",
       "x-orion-agent-model": "agent",
+      // App 端靠这两个头把本次消耗同步进额度卡片
+      "x-orion-quota-used": String(quota.used),
+      "x-orion-quota-limit": String(quota.limit),
     },
   });
 });
@@ -146,3 +163,160 @@ agentRoutes.post("/session/reset", requireAuth, async (c) => {
   await clearAgentSession(c.get("db"), user.userId, appSessionId);
   return c.json({ ok: true });
 });
+
+// ---- 产物读取（Agent 改过的文件 / dev server 预览） ----
+//
+// 为什么需要代理：Agent 干完活产出在**沙箱**里（改的文件、起的 dev server），
+// 这些只能通过 orion-forge 的 REST 端点读，而那些端点要求 API Key 鉴权。
+// App 拿不到实例地址（只见 /api/agent/*），故由后端转发。
+//
+// 路径参数里的 :remoteSession 用 App 自己的会话 id 查映射得到，
+// App 不需要知道远端 session/chat 的存在。
+
+/** 取该用户实例的解密凭据与规范化后的根地址。 */
+async function instanceTarget(c: Context<Env>) {
+  const user = c.get("user");
+  const instance = await requireInstance(c.get("db"), user.userId);
+  const apiKey = await decryptSecret(c.env.JWT_SECRET, instance.api_key_enc);
+  return {
+    base: instance.base_url.replace(/\/+$/, ""),
+    key: apiKey,
+  };
+}
+
+/** 由 App 会话 id 反查远端 sessionId；没有映射时返回 null。 */
+async function remoteSessionOf(db: Client, userId: string, appSessionId: string) {
+  const mapped = await getAgentSession(db, userId, appSessionId);
+  return mapped?.remote_session ?? null;
+}
+
+/**
+ * GET /agent/files?appSessionId=xxx
+ * 列出 Agent 在沙箱里改动的文件树。
+ */
+agentRoutes.get("/files", requireAuth, async (c) => {
+  const user = c.get("user");
+  const db = c.get("db");
+  const appSessionId = String(c.req.query("appSessionId") ?? "").trim();
+  if (!appSessionId) throw errors.badRequest("缺少 appSessionId");
+
+  const remoteSession = await remoteSessionOf(db, user.userId, appSessionId);
+  if (!remoteSession) throw errors.notFound("该会话尚未产生远端 Agent 会话，请先发送一条消息");
+
+  const { base, key } = await instanceTarget(c);
+  return proxyInstance(`${base}/api/sessions/${encodeURIComponent(remoteSession)}/files`, key);
+});
+
+/**
+ * GET /agent/file?appSessionId=xxx&path=src/app.tsx
+ * 读取单个文件内容。
+ */
+agentRoutes.get("/file", requireAuth, async (c) => {
+  const user = c.get("user");
+  const db = c.get("db");
+  const appSessionId = String(c.req.query("appSessionId") ?? "").trim();
+  const path = String(c.req.query("path") ?? "").trim();
+  if (!appSessionId) throw errors.badRequest("缺少 appSessionId");
+  if (!path) throw errors.badRequest("缺少 path");
+
+  const remoteSession = await remoteSessionOf(db, user.userId, appSessionId);
+  if (!remoteSession) throw errors.notFound("该会话尚未产生远端 Agent 会话，请先发送一条消息");
+
+  const { base, key } = await instanceTarget(c);
+  const target =
+    `${base}/api/sessions/${encodeURIComponent(remoteSession)}/files/content` +
+    `?path=${encodeURIComponent(path)}`;
+  return proxyInstance(target, key);
+});
+
+/**
+ * POST /agent/dev-server?appSessionId=xxx
+ * 启动（或复用）Agent 在沙箱里起的 dev server，回传预览地址。
+ *
+ * 注意：forge 侧该端点**只有 POST/DELETE，没有 GET** —— 启动是写操作
+ * （要装依赖、execDetached 起进程），不是查询。已跑起来时 POST 是幂等的，
+ * 直接回既有地址。
+ */
+agentRoutes.post("/dev-server", requireAuth, async (c) => {
+  const user = c.get("user");
+  const db = c.get("db");
+  const appSessionId = String(c.req.query("appSessionId") ?? "").trim();
+  if (!appSessionId) throw errors.badRequest("缺少 appSessionId");
+
+  const remoteSession = await remoteSessionOf(db, user.userId, appSessionId);
+  if (!remoteSession) throw errors.notFound("该会话尚未产生远端 Agent 会话，请先发送一条消息");
+
+  const { base, key } = await instanceTarget(c);
+  return proxyInstance(
+    `${base}/api/sessions/${encodeURIComponent(remoteSession)}/dev-server`,
+    key,
+    "POST",
+  );
+});
+
+/**
+ * DELETE /agent/dev-server?appSessionId=xxx
+ * 停掉 dev server，释放沙箱端口。
+ */
+agentRoutes.delete("/dev-server", requireAuth, async (c) => {
+  const user = c.get("user");
+  const db = c.get("db");
+  const appSessionId = String(c.req.query("appSessionId") ?? "").trim();
+  if (!appSessionId) throw errors.badRequest("缺少 appSessionId");
+
+  const remoteSession = await remoteSessionOf(db, user.userId, appSessionId);
+  if (!remoteSession) throw errors.notFound("该会话尚未产生远端 Agent 会话，请先发送一条消息");
+
+  const { base, key } = await instanceTarget(c);
+  return proxyInstance(
+    `${base}/api/sessions/${encodeURIComponent(remoteSession)}/dev-server`,
+    key,
+    "DELETE",
+  );
+});
+
+/**
+ * 转发到实例并原样回传 JSON。
+ *
+ * 错误码语义与 /chat 一致：401/403 说明我们存的 key 不对（用户改了实例的
+ * AGENT_API_KEY 或重建了实例），对 App 报 502 而不是让它以为是自己问题。
+ *
+ * [method] 默认 GET；dev-server 要转发 POST/DELETE，故显式传。
+ */
+async function proxyInstance(
+  target: string,
+  key: string,
+  method: "GET" | "POST" | "DELETE" = "GET",
+): Promise<Response> {
+  let resp: Response;
+  try {
+    resp = await fetch(target, {
+      method,
+      headers: { authorization: `Bearer ${key}`, accept: "application/json" },
+    });
+  } catch (e) {
+    throw new ApiError(
+      502,
+      "agent_unreachable",
+      `无法连接 Agent 实例：${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  const text = await resp.text();
+  if (!resp.ok) {
+    if (resp.status === 401 || resp.status === 403) {
+      throw new ApiError(502, "agent_error", "Agent 实例鉴权失败，请检查该实例的 API Key 是否已更换");
+    }
+    // 业务层错误（如沙箱未初始化）原样回传，App 需要看到具体原因
+    return new Response(text, {
+      status: resp.status,
+      headers: { "content-type": resp.headers.get("content-type") ?? "application/json" },
+    });
+  }
+  return new Response(text, {
+    status: 200,
+    headers: {
+      "content-type": resp.headers.get("content-type") ?? "application/json",
+      "cache-control": "no-store",
+    },
+  });
+}

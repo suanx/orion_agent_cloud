@@ -188,3 +188,42 @@ describe("整流转换", () => {
     expect(out).not.toContain("ping");
   });
 });
+
+describe("convertStream 边界事件（Agent 外部接入场景）", () => {
+  it("tool-approval-request 转成可读提示而非静默丢弃", () => {
+    const out = convertChunk(JSON.stringify({ type: "tool-approval-request", toolName: "bash" }));
+    // 关键：App 场景下无人应答审批，必须让用户看到原因
+    expect(out.join("")).toContain("bash");
+    expect(out.join("")).toContain("无法应答审批");
+  });
+
+  it("审批事件缺 toolName 时也能提示", () => {
+    const out = convertChunk(JSON.stringify({ type: "tool-approval-request" }));
+    expect(out.join("")).toContain("某个操作");
+  });
+
+  it("abort 收尾为 [DONE] 且不标记 stop（区分「取消」与「正常结束」）", () => {
+    const out = convertChunk(JSON.stringify({ type: "abort" })).join("");
+    expect(out).toContain("data: [DONE]");
+    expect(out).not.toContain('"finish_reason":"stop"');
+  });
+
+  it("文本/思考的起止边界事件被忽略", () => {
+    for (const t of ["text-start", "text-end", "reasoning-start", "reasoning-end"]) {
+      expect(convertChunk(JSON.stringify({ type: t }))).toEqual([]);
+    }
+  });
+
+  it("message-metadata 被忽略（App 从响应头取）", () => {
+    expect(convertChunk(JSON.stringify({ type: "message-metadata", messageMetadata: { modelId: "x" } }))).toEqual([]);
+  });
+
+  it("tool-output-denied 被忽略", () => {
+    expect(convertChunk(JSON.stringify({ type: "tool-output-denied" }))).toEqual([]);
+  });
+
+  it("source-url / source-document 被忽略（App 无引用展示位）", () => {
+    expect(convertChunk(JSON.stringify({ type: "source-url", sourceId: "s1", url: "https://x" }))).toEqual([]);
+    expect(convertChunk(JSON.stringify({ type: "source-document", sourceId: "s1" }))).toEqual([]);
+  });
+});

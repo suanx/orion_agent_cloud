@@ -59,13 +59,16 @@ export const PLAN_LIMITS: Record<Plan, Record<string, number>> = {
  */
 export const WEEKLY_LIMITS: Record<WeeklyPlan, Record<string, number>> = {
   free: {
-    ai_chat: 100, // 免费版：每周 100 轮
+    ai_chat: 100, // 免费版：每周 100 轮云端模型对话
+    agent_run: 20, // 云端 Agent：每周 20 次（Agent 单次成本远高于普通对话）
   },
   pro: {
     ai_chat: 1000, // 专业版：每周 1000 轮
+    agent_run: 200,
   },
   lifetime: {
     ai_chat: 20000, // 永久版：每周 20000 轮
+    agent_run: 2000,
   },
 };
 

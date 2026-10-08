@@ -118,15 +118,42 @@ export function convertChunk(
       ];
     }
 
+    // 工具审批请求：App 场景下 orion-forge 已被配置为自动放行（见
+    // /api/agent/chat 的 agentOptions.toolApproval），理论上不会到这里。
+    // 万一实例配置有变而真的发出来了，转成正文提示——让用户知道
+    // "Agent 在等一个没人点的确认"，好过流静默停住看不出原因。
+    case "tool-approval-request": {
+      const name = event.toolName || "某个操作";
+      return [
+        chunk({ content: `\n\n⚠️ Agent 请求确认「${name}」，但当前调用方无法应答审批，已跳过。` }, null),
+      ];
+    }
+
+    // 客户端主动中断：AI SDK 给 abort 而非 finish，不转成 stop ——
+    // 转了会让 App 把「被取消」误认为「正常结束」。
+    case "abort":
+      return [DONE];
+
     case "tool-output-available":
     case "tool-input-start":
     case "tool-input-delta":
     case "tool-output-error":
     case "tool-input-error":
+    case "tool-output-denied":
+    // 文本与思考的起止边界：App 只关心增量内容，起止本身无意义
+    case "text-start":
+    case "text-end":
+    case "reasoning-start":
+    case "reasoning-end":
+    // 元数据（模型 id、耗时等）：App 从响应头拿，不从流里读
+    case "message-metadata":
     case "start":
     case "start-step":
     case "finish-step":
       return []; // App 侧不需要这些中间态
+
+    // source-url / source-document（引用来源）：App 无对应展示位，
+    // 丢弃即可。若日后要显示引用，需在 App 侧加事件类型。
 
     case "finish":
       return [chunk({}, "stop"), DONE];
