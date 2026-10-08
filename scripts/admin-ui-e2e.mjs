@@ -93,6 +93,23 @@ global.fetch = async (url, opts = {}) => {
         enabled: true, sort: 0, keyState: "已配置" },
     ] }) };
   }
+  if (u.endsWith("/agent-instances") || /\/agent-instances\//.test(u)) {
+    // 按方法区分：POST 是保存、DELETE 是删除、GET 才是列表。
+    // ⚠️ 不能用 calls.filter(POST).length > 0 判断——此前其他测试已产生过
+    // POST 记录，会让列表桩误返回保存结果，导致列表为空、onclick 数为 0。
+    const method = opts.method ?? "GET";
+    if (method === "POST") {
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    }
+    if (method === "DELETE") {
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ instances: [
+      { userId: "u_agent_1", email: "agent@local.dev", plan: "pro",
+        baseUrl: "https://forge.example.com", enabled: true,
+        label: "云端 Agent", keyConfigured: true },
+    ] }) };
+  }
   if (u.endsWith("/weekly-usage")) {
     return { ok: true, status: 200, json: async () => ({ weekStart: "2026-10-05", usage: [
       { user_id: "u_abc123", week_start: "2026-10-05", feature: "ai_chat", count: 7 },
@@ -107,7 +124,9 @@ const scenario = `
 Object.assign(globalThis, { setPlan, setBan, toggleAnnouncement, deleteAnnouncement,
   editAnnouncement, saveAnnouncement, loadGrant, loadAnnouncements, loadDashboard, api, esc, toast,
   loadProviders, loadWeeklyUsage, saveProvider, editProvider, toggleProvider, deleteProvider,
-  parseModelsInput, resetProviderForm });
+  parseModelsInput, resetProviderForm,
+  loadAgentInstances, saveAgentInstance, editAgentInstance, deleteAgentInstance,
+  clearAgentInstanceForm });
 globalThis.__done = (function () {
   var flush = function () { return new Promise(function (r) { setTimeout(r, 30); }); };
   var grab = function (id) { var el = document.getElementById(id); return el ? el.innerHTML : ''; };
@@ -140,6 +159,15 @@ globalThis.__done = (function () {
     document.getElementById('pvModels').value = '[{"name":"m1","label":"M1"}]';
     steps.push(['saveProvider', (function () { try { saveProvider(); return 'called'; } catch (e) { return 'THROW ' + e.message; } })()]);
     await flush();
+    steps.push(['loadAgentInstances', (function () { try { loadAgentInstances(); return 'called'; } catch (e) { return 'THROW ' + e.message; } })()]);
+    await flush();
+    steps.push(['aiTable 行数', (grab('aiTable').match(/<tr>/g) || []).length]);
+    steps.push(['aiTable HTML', grab('aiTable')]);
+    document.getElementById('aiUserId').value = 'u_agent_new';
+    document.getElementById('aiBaseUrl').value = 'https://new-forge.example.com';
+    document.getElementById('aiApiKey').value = 'sk-agent-key';
+    steps.push(['saveAgentInstance', (function () { try { saveAgentInstance(); return 'called'; } catch (e) { return 'THROW ' + e.message; } })()]);
+    await flush();
     steps.push(['loadDashboard', (function () { try { loadDashboard(); return 'called'; } catch (e) { return 'THROW ' + e.message; } })()]);
     await flush();
     steps.push(['sUsers 文本', document.getElementById('sUsers').textContent]);
@@ -154,7 +182,7 @@ console.log("场景执行: ✅");
 
 // ---- 4) 校验 onclick ----
 let bad = 0;
-for (const key of ["grantTable HTML", "annTable HTML", "pvTable HTML", "pvUsageTable HTML"]) {
+for (const key of ["grantTable HTML", "annTable HTML", "pvTable HTML", "pvUsageTable HTML", "aiTable HTML"]) {
   const tableHtml = map[key] || "";
   const attrs = [...tableHtml.matchAll(/onclick="([^"]+)"/g)].map((m) => m[1]);
   console.log(`\n${key}: ${(tableHtml.match(/<tr/g) || []).length} 行, ${attrs.length} 个 onclick`);
@@ -205,6 +233,20 @@ await clickAndExpect("deleteAnnouncement(", "/announcements/", "annTable HTML", 
 await clickAndExpect("editProvider(", "/providers", "pvTable HTML", "GET");
 const toggleOk = await clickAndExpect("toggleProvider(", "/providers", "pvTable HTML", "POST");
 await clickAndExpect("deleteProvider(", "/providers/", "pvTable HTML", "DELETE");
+await clickAndExpect("editAgentInstance(", "/agent-instances", "aiTable HTML", "GET");
+const aiDelOk = await clickAndExpect("deleteAgentInstance(", "/agent-instances/", "aiTable HTML", "DELETE");
+const aiSaveCall = calls.find(
+  (c) =>
+    c.method === "POST" &&
+    c.url.endsWith("/agent-instances") &&
+    String(c.body ?? "").includes("userId"),
+);
+const aiSaveOk = !!aiSaveCall;
+console.log(
+  aiSaveOk
+    ? `  ✅ saveAgentInstance -> POST ${aiSaveCall.url.replace("http://x", "")} body=${String(aiSaveCall.body).slice(0, 90)}`
+    : "  ❌ saveAgentInstance 未发出带 userId 的 POST /agent-instances",
+);
 
 // saveProvider 应发出带 models 数组的 POST
 const spCall = calls.find((c) => c.method === "POST" && c.url.endsWith("/providers") && String(c.body ?? "").includes("models"));
@@ -213,5 +255,5 @@ console.log(spCall
   : "  ❌ saveProvider 未发出带 models 的 POST /providers");
 
 console.log("\n仪表盘 sUsers:", map["sUsers 文本"] === "" ? "(空)" : map["sUsers 文本"]);
-console.log(bad === 0 && spCall && toggleOk ? "\n管理台脚本全部通过" : `\n失败: onclick非法=${bad} saveProvider=${!!spCall} toggleProvider=${!!toggleOk}`);
-process.exit(bad === 0 && spCall && toggleOk ? 0 : 1);
+console.log(bad === 0 && spCall && toggleOk && aiDelOk && aiSaveOk ? "\n管理台脚本全部通过" : `\n失败: onclick非法=${bad} saveProvider=${!!spCall} toggleProvider=${!!toggleOk} aiDelete=${!!aiDelOk} aiSave=${!!aiSaveOk}`);
+process.exit(bad === 0 && spCall && toggleOk && aiDelOk && aiSaveOk ? 0 : 1);

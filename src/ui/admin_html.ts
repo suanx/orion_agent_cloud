@@ -217,6 +217,7 @@ section.view.active { display:block; }
 
   <div class="grp">AI 模型</div>
   <button class="nav-item" data-v="prov" onclick="show('prov')"><svg class="ic" aria-hidden="true"><use href="#i-diamond"></use></svg> 供应商配置</button>
+  <button class="nav-item" data-v="inst" onclick="show('inst')"><svg class="ic" aria-hidden="true"><use href="#i-diamond"></use></svg> Agent 实例授权</button>
 
   <div class="grp">用户管理</div>
   <button class="nav-item" data-v="usr" onclick="show('usr')"><svg class="ic" aria-hidden="true"><use href="#i-users"></use></svg> 用户列表</button>
@@ -355,6 +356,35 @@ section.view.active { display:block; }
       <div class="scroll-x"><table id="pvUsageTable"></table></div>
     </div>
   </section>
+
+  <section id="v-inst" class="view">
+    <div class="panel glass">
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-diamond"></use></svg> 开通/编辑用户 Agent 实例</h2>
+      <div class="row">
+        <input id="aiUserId" placeholder="用户 ID（管理台用户列表可复制，如 u_xxxx）" style="flex:2; min-width:260px;">
+        <input id="aiLabel" placeholder="App 内显示名（默认「云端 Agent」）" style="flex:1; min-width:180px;">
+      </div>
+      <div class="row">
+        <input id="aiBaseUrl" placeholder="实例地址，如 https://my-forge.example.com（不含 /api）" style="flex:2; min-width:260px;">
+      </div>
+      <div class="row">
+        <input id="aiApiKey" type="password" placeholder="API Key（该实例的 AGENT_API_KEY；编辑时留空 = 不改动）" style="flex:1; min-width:260px;">
+        <label style="font-size:13px; display:flex; align-items:center; gap:5px;"><input type="checkbox" id="aiEnabled" checked style="width:auto;"> 启用（停用后该用户 App 内入口消失）</label>
+      </div>
+      <div class="row">
+        <button class="btn" onclick="saveAgentInstance()">保存授权</button>
+        <button class="btn ghost" onclick="clearAgentInstanceForm()">清空表单</button>
+      </div>
+      <p class="dim" style="font-size:12px; margin:10px 0 0;">
+        用户自行部署 orion-forge 后，把它的地址与 AGENT_API_KEY 填在这里即可开通。<br>
+        App 端<b>不提供任何填写入口</b>，也看不到这个地址与密钥——只知道自己有「云端 Agent」可用。未开通的用户不显示任何入口。
+      </p>
+    </div>
+    <div class="panel glass">
+      <h2><svg class="ic" aria-hidden="true"><use href="#i-list"></use></svg> 已授权实例 <button class="btn ghost" style="padding:4px 12px; font-size:12px; margin-left:auto;" onclick="loadAgentInstances()">刷新</button></h2>
+      <div class="scroll-x"><table id="aiTable"></table></div>
+    </div>
+  </section>
  </div>
 </div>
 <div id="toast"></div>
@@ -363,7 +393,7 @@ section.view.active { display:block; }
 // EdgeOne 部署时函数挂在 /api/* 下(前缀 /api); 本地 dev 直接是根路径。
 var APIBASE = (location.pathname.indexOf('/api') === 0 ? '/api' : '') + '/admin';
 var TOKEN = localStorage.getItem('orion_admin_token') || '';
-var VIEW_META = { dash:'首页', grant:'账号授权', ann:'公告管理', prov:'供应商配置', usr:'用户列表', usage:'用量统计', audit:'审计日志' };
+var VIEW_META = { dash:'首页', grant:'账号授权', ann:'公告管理', prov:'供应商配置', inst:'Agent 实例授权', usr:'用户列表', usage:'用量统计', audit:'审计日志' };
 
 function api(path, opts) {
   opts = opts || {};
@@ -436,6 +466,7 @@ function show(v) {
   if (v === 'grant') loadGrant();
   if (v === 'ann') loadAnnouncements();
   if (v === 'prov') { loadProviders(); loadWeeklyUsage(); }
+  if (v === 'inst') loadAgentInstances();
   if (v === 'usr') loadUsers();
   if (v === 'usage') loadUsage();
   if (v === 'audit') loadAudit();
@@ -505,6 +536,74 @@ function setPlan(id) {
   api('/users/' + encodeURIComponent(id) + '/plan', {method:'POST', body: body}).then(function(r) {
     toast(r.message || '已更新'); loadGrant();
   }).catch(function(e) { toast('授权失败: ' + e.message); });
+}
+
+// ---------- 用户 Agent 实例授权（orion-forge）----------
+function clearAgentInstanceForm() {
+  document.getElementById('aiUserId').value = '';
+  document.getElementById('aiLabel').value = '';
+  document.getElementById('aiBaseUrl').value = '';
+  document.getElementById('aiApiKey').value = '';
+  document.getElementById('aiEnabled').checked = true;
+}
+function loadAgentInstances() {
+  api('/agent-instances').then(function(r) {
+    var rows = r.instances || [];
+    var html = '<tr><th>用户</th><th>邮箱</th><th>实例地址</th><th>显示名</th><th>Key</th><th>状态</th><th></th></tr>';
+    if (!rows.length) html += '<tr><td colspan="7" class="empty">尚未给任何用户开通 —— App 端不显示任何入口</td></tr>';
+    for (var i = 0; i < rows.length; i++) {
+      var a = rows[i];
+      html += '<tr><td class="dim">' + esc(a.userId) + '</td>'
+        + '<td>' + esc(a.email || '—') + '</td>'
+        + '<td class="dim" style="max-width:240px;">' + esc(a.baseUrl) + '</td>'
+        + '<td>' + esc(a.label || '云端 Agent') + '</td>'
+        + '<td class="dim">' + (a.keyConfigured ? '已配置' : '—') + '</td>'
+        + '<td><span class="badge ' + (a.enabled ? 'unused' : 'revoked') + '">' + (a.enabled ? '已开通' : '已停用') + '</span></td>'
+        + '<td style="white-space:nowrap;">'
+        + '<button class="btn ghost" style="padding:4px 10px; font-size:12px;" onclick="editAgentInstance(\\'' + esc(a.userId) + '\\')">编辑</button> '
+        + '<button class="btn danger" style="padding:4px 10px; font-size:12px;" onclick="deleteAgentInstance(\\'' + esc(a.userId) + '\\')">删除</button></td></tr>';
+    }
+    document.getElementById('aiTable').innerHTML = html;
+  }).catch(function(e) { if (TOKEN) toast('加载失败: ' + e.message); });
+}
+function saveAgentInstance() {
+  var body = {
+    userId: document.getElementById('aiUserId').value.trim(),
+    baseUrl: document.getElementById('aiBaseUrl').value.trim(),
+    apiKey: document.getElementById('aiApiKey').value.trim(),
+    label: document.getElementById('aiLabel').value.trim(),
+    enabled: document.getElementById('aiEnabled').checked
+  };
+  if (!body.userId || !body.baseUrl) { toast('用户 ID 与实例地址不能为空'); return; }
+  // 不在前端判断 Key 是否必填：新建时后端会拒（"新建实例必须填写 API Key"），
+  // 编辑时留空表示不改。前端硬判反而需要缓存状态，徒增复杂度。
+  api('/agent-instances', {method:'POST', body: body}).then(function() {
+    toast('已保存授权');
+    clearAgentInstanceForm(); loadAgentInstances();
+  }).catch(function(e) { toast('保存失败: ' + e.message); });
+}
+function editAgentInstance(userId) {
+  api('/agent-instances').then(function(r) {
+    var rows = r.instances || [];
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].userId === userId) {
+        document.getElementById('aiUserId').value = rows[i].userId;
+        document.getElementById('aiBaseUrl').value = rows[i].baseUrl;
+        document.getElementById('aiLabel').value = rows[i].label || '';
+        document.getElementById('aiEnabled').checked = !!rows[i].enabled;
+        // Key 不回显，留空即不改
+        document.getElementById('aiApiKey').value = '';
+        window.scrollTo(0, 0);
+        return;
+      }
+    }
+  }).catch(function(e) { toast('加载失败: ' + e.message); });
+}
+function deleteAgentInstance(userId) {
+  if (!window.confirm('确认删除该用户的 Agent 授权？App 内的入口会立即消失。')) return;
+  api('/agent-instances/' + encodeURIComponent(userId), {method:'DELETE'}).then(function() {
+    toast('已删除授权'); loadAgentInstances();
+  }).catch(function(e) { toast('删除失败: ' + e.message); });
 }
 
 // ---------- AI 模型供应商 ----------

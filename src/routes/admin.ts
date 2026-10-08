@@ -7,6 +7,12 @@ import { applyPlanGrant, validateAccountPlan } from "../services/account_plans";
 import { audit } from "../services/audit";
 import { weekStartDate } from "../plans";
 import {
+  deleteAgentInstance,
+  getInstance,
+  listAgentInstances,
+  upsertAgentInstance,
+} from "../services/agent_instances";
+import {
   createProvider,
   deleteProvider,
   listProviders,
@@ -248,4 +254,60 @@ adminRoutes.get("/weekly-usage", async (c) => {
     args: [week],
   });
   return c.json({ weekStart: week, usage: r.rows });
+});
+
+// ---- 用户自部署 Agent 实例（orion-forge）授权 ----
+
+// ---- GET /admin/agent-instances ----
+// 列表不含密钥明文；keyConfigured 只表示"是否已配置"。
+adminRoutes.get("/agent-instances", async (c) => {
+  const rows = await listAgentInstances(c.get("db"));
+  return c.json({
+    instances: rows.map((r) => ({
+      userId: r.user_id,
+      email: r.email,
+      plan: r.plan,
+      baseUrl: r.base_url,
+      enabled: !!r.enabled,
+      label: r.label,
+      keyConfigured: !!r.api_key_enc,
+    })),
+  });
+});
+
+// ---- POST /admin/agent-instances（带 userId 为更新，不带为新建）----
+// App 端不提供任何入口，只有管理员在这里录入实例地址与 API Key。
+adminRoutes.post("/agent-instances", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const userId = String(body.userId ?? "").trim();
+  if (!userId) throw errors.badRequest("userId 不能为空");
+  const baseUrl = String(body.baseUrl ?? "").trim();
+  if (!baseUrl) throw errors.badRequest("实例地址不能为空");
+
+  const db = c.get("db");
+  const existed = await getInstance(db, userId);
+  await upsertAgentInstance(db, c.env.JWT_SECRET, {
+    userId,
+    baseUrl,
+    // 编辑时留空 = 不改动已有 Key
+    apiKey: String(body.apiKey ?? ""),
+    enabled: body.enabled !== false,
+    label: String(body.label ?? ""),
+  });
+  await audit(
+    db,
+    null,
+    existed ? "agent_instance_update" : "agent_instance_create",
+    userId,
+    baseUrl,
+  );
+  return c.json({ ok: true, userId });
+});
+
+// ---- DELETE /admin/agent-instances/:userId ----
+adminRoutes.delete("/agent-instances/:userId", async (c) => {
+  const userId = c.req.param("userId");
+  await deleteAgentInstance(c.get("db"), userId);
+  await audit(c.get("db"), null, "agent_instance_delete", userId, "");
+  return c.json({ ok: true });
 });

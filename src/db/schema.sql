@@ -88,6 +88,33 @@ CREATE TABLE IF NOT EXISTS llm_providers (
   updated_at   INTEGER NOT NULL
 );
 
+-- ============ 用户自部署的 Agent 实例（orion-forge）============
+
+-- 一个用户一份授权：由管理员在管理台录入实例地址与 API Key，
+-- App 端**看不到地址、也看不到任何配置入口**，只知道自己有"云端 Agent"。
+-- base_url/api_key_enc 永不下发给 App。
+CREATE TABLE IF NOT EXISTS agent_instances (
+  user_id     TEXT PRIMARY KEY,                  -- 一个用户一个实例
+  base_url    TEXT NOT NULL,                     -- 用户自部署的 orion-forge 地址
+  api_key_enc TEXT NOT NULL,                     -- AES-GCM 密文(与 llm_providers 同口径)
+  enabled     INTEGER NOT NULL DEFAULT 1,        -- 停用后 App 侧入口消失
+  label       TEXT NOT NULL DEFAULT '云端 Agent', -- 下发给 App 的展示名
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+
+-- App 会话 ↔ Agent 实例会话的映射。
+-- open-agents 侧每次对话必须有 sessionId+chatId，而 App 是自己的会话体系，
+-- 这里按 (user_id, app_session_id) 记住对方返回的 id，续上下文时复用。
+CREATE TABLE IF NOT EXISTS agent_sessions (
+  user_id        TEXT NOT NULL,
+  app_session_id TEXT NOT NULL,                  -- App 侧会话 id
+  remote_session TEXT NOT NULL,                  -- open-agents sessionId
+  remote_chat    TEXT NOT NULL,                  -- open-agents chatId
+  updated_at     INTEGER NOT NULL,
+  PRIMARY KEY (user_id, app_session_id)
+);
+
 -- ============ 云端定时任务 ============
 
 CREATE TABLE IF NOT EXISTS cloud_tasks (
