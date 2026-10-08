@@ -7,6 +7,16 @@
 > 设计原则：orion 端上保持本地优先、可完全离线；云端只负责单机做不到的事。
 > 未登录/未激活只是云功能置灰，本地功能不受任何影响。
 
+## 📘 部署文档
+
+**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) —— 三端完整部署指南**
+
+涵盖：架构说明、账号准备、后端部署（Turso + EdgeOne）、App 构建与分发、
+可选的 Agent 平台部署、后台配置、验证清单、运维手册、常见问题。
+
+只想自部署 App 的话，[orion_agent 仓库的部署速查](https://github.com/suanx/orion_agent/blob/main/docs/DEPLOYMENT.md)
+是精简版，10 分钟能看完。
+
 ## 功能一览
 
 | 模块 | 端点 | 说明 |
