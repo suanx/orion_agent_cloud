@@ -19,9 +19,12 @@ interface EdgeOneContext {
   passThroughOnException(): void;
 }
 
+// 545 真正根因（线上探针实测）：EdgeOne 的 context 不提供 waitUntil /
+// passThroughOnException（那是 Cloudflare Pages 的约定），对 undefined 调
+// .bind() 直接 TypeError → 每个请求 545。这里防御性兜底为空实现。
 const edgeCtx = (context: EdgeOneContext) => ({
-  waitUntil: context.waitUntil.bind(context),
-  passThroughOnException: context.passThroughOnException.bind(context),
+  waitUntil: (context.waitUntil ?? (() => {})).bind(context),
+  passThroughOnException: (context.passThroughOnException ?? (() => {})).bind(context),
   props: {} as Record<string, unknown>,
 });
 
