@@ -3,6 +3,8 @@ import type { Env, Bindings } from "../env";
 import { errors } from "../utils/errors";
 import { hashPassword, verifyPassword, validateEmail, validatePassword } from "../utils/password";
 import { sha256Hex, randomToken, uuid, nowMs } from "../utils/crypto";
+import { validateRegisterEmail } from "../utils/register-policy";
+import { allocateUsername, loadOrBackfillUsername } from "../services/username";
 import { signJwt, accessTokenTtlSeconds } from "../utils/jwt";
 import { requireAuth } from "../middleware/auth";
 import { audit } from "../services/audit";
@@ -92,6 +94,12 @@ function planExpiry(plan: string, licenseExpiry: number | null): number | null {
   return plan === "lifetime" ? null : licenseExpiry;
 }
 
+/** users.username 列缺失（代码已上线但还没跑 migrate）时的可执行提示。 */
+function missingUsernameColumn(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return msg.includes("no such column") && msg.includes("username");
+}
+
 // ---- POST /auth/register ----
 authRoutes.post("/register", async (c) => {
   const body = await c.req.json().catch(() => ({}));
@@ -102,6 +110,10 @@ authRoutes.post("/register", async (c) => {
 
   const emailErr = validateEmail(email);
   if (emailErr) throw errors.badRequest(emailErr);
+  // 域名白名单：格式合法但不在名单内 → 「邮箱不支持」。
+  // 放在格式校验之后，避免把"根本不是邮箱"的输入报成"域名不支持"。
+  const domainErr = validateRegisterEmail(email, c.env.REGISTER_EMAIL_DOMAINS);
+  if (domainErr) throw errors.badRequest(domainErr, "email_domain_not_allowed");
   const pwdErr = validatePassword(password);
   if (pwdErr) throw errors.badRequest(pwdErr);
   if (!deviceId) throw errors.badRequest("缺少 deviceId");
@@ -111,18 +123,27 @@ authRoutes.post("/register", async (c) => {
   if (exists.rows.length > 0) throw errors.conflict("该邮箱已注册");
 
   const userId = `u_${uuid()}`;
+  const username = await allocateUsername(db);
   const passwordHash = await hashPassword(password);
-  await db.execute({
-    sql: `INSERT INTO users (id, email, password_hash, plan, plan_expires_at, status, created_at, updated_at)
-          VALUES (?, ?, ?, 'free', NULL, 'active', ?, ?)`,
-    args: [userId, email, passwordHash, nowMs(), nowMs()],
-  });
+  try {
+    await db.execute({
+      sql: `INSERT INTO users (id, username, email, password_hash, plan, plan_expires_at, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'free', NULL, 'active', ?, ?)`,
+      args: [userId, username, email, passwordHash, nowMs(), nowMs()],
+    });
+  } catch (e) {
+    if (missingUsernameColumn(e)) {
+      // 不要让调用方看到裸 SQLite 报错——这是部署顺序问题，不是用户的问题。
+      throw errors.internal("数据库结构未升级，请先执行 node scripts/migrate.mjs");
+    }
+    throw e;
+  }
   await touchDevice(db, userId, "free", deviceId, deviceName);
   const refreshToken = await createSession(db, userId, deviceId, deviceName, "refresh");
-  await audit(db, userId, "register", email, c.req.header("cf-connecting-ip") ?? "");
+  await audit(db, userId, "register", `${username} ${email}`, c.req.header("cf-connecting-ip") ?? "");
 
   const pair = await issueTokens(c.env, userId, "free", null, deviceId);
-  return c.json({ ...pair, refreshToken, userId });
+  return c.json({ ...pair, refreshToken, userId, username });
 });
 
 // ---- POST /auth/login ----
@@ -146,12 +167,16 @@ authRoutes.post("/login", async (c) => {
   if (String(row.status) !== "active") throw errors.forbidden("账号已被禁用");
 
   const userId = String(row.id);
+  // 账号名单独查：users.username 是后加的列，还没跑 migrate 的库里没有它。
+  // 登录是已有用户的唯一入口，这里绝不能因为缺列就让人登不进去 ——
+  // 缺列时 username 留空，App 侧回落显示 userId。
+  const username = await loadOrBackfillUsername(db, userId);
   await touchDevice(db, userId, String(row.plan), deviceId, deviceName);
   const refreshToken = await createSession(db, userId, deviceId, deviceName, "refresh");
   await audit(db, userId, "login", deviceId, c.req.header("cf-connecting-ip") ?? "");
 
   const pair = await issueTokens(c.env, userId, String(row.plan), planExpiry(String(row.plan), row.plan_expires_at as number | null), deviceId);
-  return c.json({ ...pair, refreshToken, userId });
+  return c.json({ ...pair, refreshToken, userId, username });
 });
 
 // ---- POST /auth/refresh (轮换) ----

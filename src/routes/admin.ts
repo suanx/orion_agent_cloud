@@ -27,11 +27,21 @@ adminRoutes.use("*", requireAdmin);
 // ---- GET /admin/users ----
 adminRoutes.get("/users", async (c) => {
   const db = c.get("db");
-  const r = await db.execute({
-    sql: `SELECT u.id, u.email, u.plan, u.plan_expires_at, u.status, u.created_at,
-                 (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id) AS device_count
-          FROM users u ORDER BY u.created_at DESC LIMIT 500`,
-  });
+  const base = `FROM users u ORDER BY u.created_at DESC LIMIT 500`;
+  const withCount = (cols: string) =>
+    `SELECT ${cols}, (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id) AS device_count ${base}`;
+  let r;
+  try {
+    // u.username 是后加的列；还没跑 migrate 的库没有它，
+    // 退回旧查询让列表照常打开（该列只是展示字段）。
+    r = await db.execute({
+      sql: withCount("u.id, u.username, u.email, u.plan, u.plan_expires_at, u.status, u.created_at"),
+    });
+  } catch {
+    r = await db.execute({
+      sql: withCount("u.id, NULL AS username, u.email, u.plan, u.plan_expires_at, u.status, u.created_at"),
+    });
+  }
   return c.json({ users: r.rows });
 });
 

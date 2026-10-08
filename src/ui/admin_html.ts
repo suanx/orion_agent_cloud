@@ -931,12 +931,15 @@ function deleteAnnouncement(id) {
 function loadUsers() {
   api('/users').then(function(r) {
     var rows = r.users || [];
-    var html = '<tr><th>邮箱</th><th>套餐</th><th>到期</th><th>设备</th><th>状态</th><th>注册</th><th style="text-align:right;">操作</th></tr>';
-    if (!rows.length) html += '<tr><td colspan="7" class="empty">无用户</td></tr>';
+    var html = '<tr><th>账号名</th><th>邮箱</th><th>套餐</th><th>到期</th><th>设备</th><th>状态</th><th>注册</th><th style="text-align:right;">操作</th></tr>';
+    if (!rows.length) html += '<tr><td colspan="8" class="empty">无用户</td></tr>';
     for (var i = 0; i < rows.length; i++) {
       var u = rows[i];
       var exp = u.plan_expires_at ? new Date(Number(u.plan_expires_at)).toLocaleDateString('zh-CN') : (u.plan === 'lifetime' ? '永久' : '—');
-      html += '<tr><td>' + esc(u.email) + '</td>'
+      // 老用户还没回填账号名时显示 —（首次登录会自动补发）
+      var uname = u.username ? '<span class="mono">' + esc(u.username) + '</span>' : '<span class="dim">—</span>';
+      html += '<tr><td>' + uname + '</td>'
+        + '<td>' + esc(u.email) + '</td>'
         + '<td>' + esc(u.plan) + '</td><td>' + exp + '</td><td>' + esc(u.device_count) + '</td>'
         + '<td>' + (u.status === 'banned' ? '<span class="badge banned">banned</span>' : '<span class="badge unused">active</span>') + '</td>'
         + '<td class="dim">' + fmtTime(u.created_at) + '</td>'

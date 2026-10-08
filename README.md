@@ -100,6 +100,7 @@ npm run db:migrate
    | `CLOUD_LLM_BASE_URL` 等 3 项 | 可选 | 云端定时任务用的 OpenAI 兼容端点 |
    | `UPDATE_LATEST_VERSION` 等 4 项 | 可选 | 应用内检查更新用（`UPDATE_FORCE_UPDATE=true` 本次更新强制） |
    | `PLAN_LIMITS_OVERRIDE` | 可选 | JSON，覆盖套餐配额 |
+   | `REGISTER_EMAIL_DOMAINS` | 可选 | 注册邮箱域名白名单，逗号分隔。留空用默认 `qq.com,189.cn,139.com,163.com,126.com`，名单外的邮箱注册会被拒并提示「邮箱不支持」 |
 
 4. 部署完成后会得到 `https://xxx.edgeone.app` 形式的域名
 

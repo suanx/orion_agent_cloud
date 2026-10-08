@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Env } from "../env";
 import { requireAuth } from "../middleware/auth";
 import { getUsage, weeklyQuotaState } from "../services/quota";
+import { peekUsername } from "../services/username";
 import { PLAN_LABELS } from "../plans";
 
 /**
@@ -38,6 +39,8 @@ licenseRoutes.get("/status", requireAuth, async (c) => {
   const ai = await weeklyQuotaState(db, user.userId, user.plan, "ai_chat");
   return c.json({
     userId: user.userId,
+    // 账号名 agent-<5位数字>；老用户还没回填时为空串，App 侧回落显示 userId
+    username: await peekUsername(db, user.userId),
     plan: user.plan,
     planExpiresAt: user.planExpiresAt,
     usageToday: usage,

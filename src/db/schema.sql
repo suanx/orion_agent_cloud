@@ -5,6 +5,7 @@
 
 CREATE TABLE IF NOT EXISTS users (
   id              TEXT PRIMARY KEY,              -- u_<uuid>
+  username        TEXT UNIQUE,                   -- agent-<5位数字>, 注册时生成; 老用户首次登录回填
   email           TEXT NOT NULL UNIQUE,
   password_hash   TEXT NOT NULL,                 -- pbkdf2$iter$salt$hash (hex)
   plan            TEXT NOT NULL DEFAULT 'free',  -- free | trial | pro | lifetime

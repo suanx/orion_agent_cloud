@@ -165,6 +165,17 @@ share_links  audit_log  announcements
 > 保存接口不查库（只返回 `{ok:true, id}`），只有刷新列表才查库。
 > 核对方法：直连 Turso 执行 `SELECT name FROM sqlite_master WHERE type='table';`
 
+> 🔴 **每次升级代码后都要重跑 `npm run db:migrate`**。
+> 迁移脚本除了建表，还负责给**已有库补列**（如 `users.username` 账号名）
+> 与建索引；只建表不管补列，新代码一跑就会撞 `no such column`。
+> 各接口对此的降级表现不同：
+>
+> | 接口 | 没跑迁移时的表现 |
+> |---|---|
+> | `POST /auth/register` | 500，提示「数据库结构未升级」（有意做的可执行提示） |
+> | `POST /auth/login` | 正常登录，`username` 返回空串 |
+> | `GET /admin/users` | 自动退回旧查询，只是少了「账号名」一列 |
+
 ### 2.3 部署到 EdgeOne
 
 1. 登录 [EdgeOne 控制台](https://console.cloud.tencent.com/edgeone)，新建 **Pages** 项目
@@ -192,6 +203,9 @@ share_links  audit_log  announcements
    UPDATE_FORCE_UPDATE     = false
    UPDATE_NOTES            = 请阅读 RELEASE_NOTES.md
    UPDATE_APK_URL          = https://<R2域名>/orion/orion-agent.apk
+   # 可选：注册邮箱域名白名单（逗号分隔）。不配则用默认值
+   # qq.com,189.cn,139.com,163.com,126.com
+   # REGISTER_EMAIL_DOMAINS = qq.com,189.cn,139.com,163.com,126.com
    ```
 
    > ⚠️ `PUBLIC_BASE_URL` **建议显式配置**。留空时后端会尝试从请求头 `Origin`/`Referer`
@@ -211,11 +225,18 @@ curl -i https://你的域名/api/health
 
 # 公开端点：公告（无需登录，App 启动时拉的就是它）
 curl "https://你的域名/api/announcement?platform=android&version=0.2.40"
+
+# 注册策略：白名单内的邮箱应返回 200/…，名单外的应返回 400「邮箱不支持」
+curl -i -X POST https://你的域名/api/auth/register \
+  -H 'content-type: application/json' \
+  -d '{"email":"test@gmail.com","password":"abc12345","deviceId":"dev_test","deviceName":"t"}'
 ```
 
 - 返回 **401** → 路由和鉴权都正常 ✅
 - 返回 **404** → 检查 EdgeOne 的构建输出与函数路由配置
 - `/api/announcement` 返回 `{"announcement":null}` → 完全正常，说明还没有公告
+- 注册 `gmail.com` 返回 **400 + 「邮箱不支持，仅支持以下邮箱注册：…」** → 白名单生效 ✅
+- 注册 `qq.com` 返回 **500 + 「数据库结构未升级」** → 忘了跑 `npm run db:migrate`
 
 打开管理台确认页面能加载：
 
@@ -515,12 +536,14 @@ curl -X POST https://你的forge域名/api/agent/chat \
 
 「账号授权 → 公告管理」→ 新建。填标题与正文、启用即可。
 
-**App 侧行为**：启动后 1.2 秒拉取，后台有启用的公告就弹窗。
+**App 侧行为**：启动后 1.2 秒拉取，**每次冷启动都弹一次**，
+后台有启用的公告就弹窗。
 
-- 已读标记按 `id + 更新时间`，所以**改了公告内容会重新弹一次**
-- 点「我知道了」标记已读不再打扰；点「稍后看」静默 6 小时
+- 同一次启动内最多弹一次（不会因为多个入口重复弹遮罩）
 - 公告接口是**公开**的（无需登录），用户没登录也能看到
 - 可设版本范围（`min_version` / `max_version`），只对特定版本弹
+- 改了公告内容，下次启动照常弹（不再依赖「已读」标记）
+- 更早的 App 版本仍是「点过‘我知道了’就不再弹」，升级后才生效
 
 ### 5.4 可选：给账号授权套餐
 
@@ -532,6 +555,34 @@ curl -X POST https://你的forge域名/api/agent/chat \
 | 顺延 | 在现有到期时间上叠加 |
 
 `lifetime`（永久）覆盖一切；更高套餐未过期时授权低级套餐会保留高套餐到期时间。到期自动降级 `free`。
+
+### 5.5 注册策略：邮箱白名单与账号名
+
+后端在 `POST /auth/register` 上做了两层限制（实现见 `src/utils/register-policy.ts`）。
+
+**① 邮箱域名白名单**
+
+只允许这些域名注册，其余一律 **400 +「邮箱不支持，仅支持以下邮箱注册：…」**：
+
+```
+qq.com  189.cn  139.com  163.com  126.com
+```
+
+- 要改名单：配环境变量 `REGISTER_EMAIL_DOMAINS`（逗号分隔，可带 `@`），见 `.env.example`
+- 校验顺序是「先格式、后域名」，所以 `not-an-email` 报的是格式错误，不会误报成域名不支持
+- **只管注册**，登录不受影响——老用户拿自己的邮箱正常登录
+
+**② 账号名 `agent-` + 5 位随机数字**
+
+注册时后端生成（如 `agent-04731`），写入 `users.username`（唯一索引）：
+
+- 生成时查库避让撞号，连续 12 次都撞才报错
+- **老用户首次登录自动回填**，不需要手工迁移数据
+- 下发位置：`/auth/register`、`/auth/login`、`/license/status` 三处的 `username` 字段
+- 管理台「用户列表」第一列展示；未回填的显示 `—`
+- App 端个人中心显示 `账号 agent-04731 · 点按复制邮箱`，拿不到时回落显示 `u_xxxx`
+
+> ⚠️ 这一列是后加的，**必须先跑 `npm run db:migrate`**（详见 2.2）。
 
 ---
 

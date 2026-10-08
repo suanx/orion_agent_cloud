@@ -58,6 +58,12 @@ const COLUMNS = {
     ["payload_encrypted", "TEXT"],
     ["nonce", "TEXT"],
   ],
+  users: [
+    // 账号名 agent-<5位数字>。注意这里不写 UNIQUE —— SQLite 的
+    // ALTER TABLE ADD COLUMN 不接受 UNIQUE/PRIMARY KEY 约束，只能随后
+    // 单独建唯一索引（见下方 idx_users_username）。
+    ["username", "TEXT"],
+  ],
 };
 for (const [table, cols] of Object.entries(COLUMNS)) {
   const info = await db.execute(`PRAGMA table_info(${table})`);
@@ -68,5 +74,12 @@ for (const [table, cols] of Object.entries(COLUMNS)) {
     console.log(`  补列 ${table}.${name} ${decl}`);
   }
 }
+
+// users.username 的唯一索引（新库由 schema.sql 的 UNIQUE 直接建好）。
+// 允许多个 NULL：老用户在首次登录时才回填账号名。
+await db.execute(
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)"
+);
+console.log("  索引 idx_users_username 已就绪");
 
 console.log("现有表:", check.rows.map((r) => r.name).join(", "));

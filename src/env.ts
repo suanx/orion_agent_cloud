@@ -27,6 +27,13 @@ export interface Bindings {
   UPDATE_APK_URL?: string;
 
   PLAN_LIMITS_OVERRIDE?: string;
+
+  /**
+   * 注册邮箱域名白名单（逗号分隔，可带 @）。
+   * 留空用默认：qq.com,189.cn,139.com,163.com,126.com。
+   * 见 src/utils/register-policy.ts。
+   */
+  REGISTER_EMAIL_DOMAINS?: string;
 }
 
 export type Env = { Bindings: Bindings };
