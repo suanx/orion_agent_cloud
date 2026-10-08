@@ -21,8 +21,10 @@ const app = new Hono<Env>().basePath("/api");
 
 // 每请求新建 Turso HTTP 客户端
 app.use("*", async (c, next) => {
-  if (c.req.path.startsWith("/update")) return next(); // 版本检查无需数据库
-  c.set("db", getDb(c.env));
+  // basePath("/api") 后 c.req.path 带 /api 前缀(此前写 "/update" 永不匹配,
+  // 版本检查也被迫建库连接——2026-10-08 修正)
+  if (c.req.path.startsWith("/api/update")) return next(); // 版本检查无需数据库
+  c.set("db", await getDb(c.env));
   await next();
 });
 

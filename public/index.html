@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Orion Backend</title>
+  <style>
+    body { font-family: system-ui, sans-serif; display: flex; min-height: 100vh;
+           align-items: center; justify-content: center; margin: 0;
+           background: #0f172a; color: #e2e8f0; }
+    .card { text-align: center; padding: 2rem; }
+    h1 { font-size: 1.4rem; margin: 0 0 .5rem; }
+    p { color: #94a3b8; font-size: .9rem; margin: .3rem 0; }
+    code { background: #1e293b; padding: .15rem .4rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>orion-backend 运行中</h1>
+    <p>API 端点：<code>/api/auth</code> <code>/api/relay</code> <code>/api/tasks</code> <code>/api/mcp</code> <code>/api/update</code> <code>/api/announcement</code></p>
+    <p>管理台：<code>/api/admin</code></p>
+    <p>健康检查：<code>GET /api/health</code>（需 Bearer 令牌）</p>
+  </div>
+</body>
+</html>
