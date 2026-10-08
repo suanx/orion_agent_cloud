@@ -11,6 +11,8 @@ export const PLAN_LIMITS: Record<Plan, Record<string, number>> = {
     task_run: 3,
     max_devices: 1,
     max_tasks: 1,
+    backup_bytes: 5 * 1024 * 1024,   // 云备份 5MB
+    sync_rows: 2000,                // 同步行数
   },
   trial: {
     relay_search: 100,
@@ -18,6 +20,8 @@ export const PLAN_LIMITS: Record<Plan, Record<string, number>> = {
     task_run: 10,
     max_devices: 2,
     max_tasks: 5,
+    backup_bytes: 20 * 1024 * 1024,  // 20MB
+    sync_rows: 10000,
   },
   pro: {
     relay_search: 500,
@@ -25,6 +29,8 @@ export const PLAN_LIMITS: Record<Plan, Record<string, number>> = {
     task_run: 60,
     max_devices: 3,
     max_tasks: 20,
+    backup_bytes: 100 * 1024 * 1024, // 100MB
+    sync_rows: 50000,
   },
   lifetime: {
     relay_search: 500,
@@ -32,6 +38,8 @@ export const PLAN_LIMITS: Record<Plan, Record<string, number>> = {
     task_run: 60,
     max_devices: 3,
     max_tasks: 20,
+    backup_bytes: 500 * 1024 * 1024, // 500MB
+    sync_rows: 200000,
   },
 };
 

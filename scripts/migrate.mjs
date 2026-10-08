@@ -50,4 +50,23 @@ await db.batch(statements.map((sql) => ({ sql, args: [] })), "write");
 console.log(`完成: ${statements.length} 条 DDL 已应用。`);
 
 const check = await db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name");
+// ---- 已有库补列(2026-10-08 多端同步): SQLite 不支持 ADD COLUMN IF NOT EXISTS,
+// 逐列检查 pragma 后再ALTER, 幂等安全 ----
+const COLUMNS = {
+  sync_state: [
+    ["device_id", "TEXT NOT NULL DEFAULT ''"],
+    ["payload_encrypted", "TEXT"],
+    ["nonce", "TEXT"],
+  ],
+};
+for (const [table, cols] of Object.entries(COLUMNS)) {
+  const info = await db.execute(`PRAGMA table_info(${table})`);
+  const have = new Set(info.rows.map((r) => String(r.name)));
+  for (const [name, decl] of cols) {
+    if (have.has(name)) continue;
+    await db.execute(`ALTER TABLE ${table} ADD COLUMN ${name} ${decl}`);
+    console.log(`  补列 ${table}.${name} ${decl}`);
+  }
+}
+
 console.log("现有表:", check.rows.map((r) => r.name).join(", "));

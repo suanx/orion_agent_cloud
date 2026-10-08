@@ -92,12 +92,18 @@ CREATE INDEX IF NOT EXISTS idx_runs_user ON task_runs(user_id, started_at);
 
 -- ============ 同步 (M4, 预留) ============
 
+-- ============ 多端同步 (行级密文 + 变更元数据) ============
+-- 行级零知识同步: 每行独立加密后上传, 服务端只见 row_id/时间戳/设备, 读不到内容。
+-- 冲突策略: updated_at 末写胜出(excluded.updated_at >= 现有才覆盖); 删除写 tombstone。
 CREATE TABLE IF NOT EXISTS sync_state (
   user_id    TEXT NOT NULL,
   table_name TEXT NOT NULL,
   row_id     TEXT NOT NULL,
   updated_at INTEGER NOT NULL,
   tombstone  INTEGER NOT NULL DEFAULT 0,
+  device_id     TEXT NOT NULL DEFAULT '',        -- 最后写入的设备(冲突排查/多设备归属)
+  payload_encrypted TEXT,                        -- 行级密文(tombstone 行为 NULL)
+  nonce      TEXT,                               -- AES-GCM nonce(base64), 与密文配套
   PRIMARY KEY (user_id, table_name, row_id)
 );
 
