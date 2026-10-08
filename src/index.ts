@@ -70,6 +70,20 @@ app.onError((err, c) => {
   }
   console.error("[orion-backend] unhandled:", err);
   const e = errors.internal();
+  // 诊断期(2026-10-08): DEBUG_ERRORS=true 时把错误原文回传, 便于定位边缘运行时
+  // 与本地的行为差异(如 PBKDF2 迭代在边缘超时)。定位完成后置false 或删除。
+  if (c.env.DEBUG_ERRORS === "true") {
+    return c.json(
+      {
+        error: {
+          code: e.code,
+          message: `${err.name}: ${err.message}`,
+          stack: String((err as Error).stack ?? "").split("\n").slice(0, 4).join(" | "),
+        },
+      },
+      500
+    );
+  }
   return c.json({ error: { code: e.code, message: e.message } }, 500);
 });
 
