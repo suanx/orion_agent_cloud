@@ -26,7 +26,20 @@ updateRoutes.get("/check", async (c) => {
     return c.json({ platform, supported: false, latest: current, updateAvailable: false });
   }
   const latest = env.UPDATE_LATEST_VERSION ?? "";
-  if (!latest) throw new Error("UPDATE_LATEST_VERSION 未配置");
+  if (!latest) {
+    // 未配置更新源时优雅降级(返回无更新), 而不是 500——App 端会自然
+    // 回退 GitHub Releases 检查, 管理台补配环境变量后即自动生效
+    return c.json({
+      platform,
+      supported: true,
+      latest: current,
+      current,
+      updateAvailable: false,
+      forceUpdate: false,
+      configured: false,
+      hint: "UPDATE_LATEST_VERSION 未配置(EdgeOne 环境变量)",
+    });
+  }
 
   const updateAvailable = isNewer(latest, current);
   const minSupported = env.UPDATE_MIN_VERSION ?? "0.0.0";
