@@ -47,49 +47,29 @@ describe("AI SDK 事件 → OpenAI 兼容 SSE", () => {
     expect(out[1]).toContain("[DONE]");
   });
 
-  it("工具调用带 index/id/name/arguments，且 index 稳定", () => {
-    const toolIndex = new Map<string, number>();
-    const a = convertChunk(
+  it("tool-input-available 一律丢弃：工具循环在 forge 侧完成，绝不下发 tool_calls", () => {
+    // 2026-10-10 根因修复：若把 forge 的工具调用转成 tool_calls 发给
+    // App，App 的编排器会在本地再开一层工具循环并触发上游重跑整个
+    // 任务（双循环错配），表现为云端 Agent「没有回复内容」。
+    const out = convertChunk(
       JSON.stringify({
         type: "tool-input-available",
         toolCallId: "call_1",
         toolName: "bash",
         input: { command: "ls" },
       }),
-      { toolIndex },
     );
-    const b = convertChunk(
+    expect(out).toHaveLength(0);
+    // 本地工具（非 providerExecuted）同样不转发
+    const out2 = convertChunk(
       JSON.stringify({
         type: "tool-input-available",
         toolCallId: "call_2",
         toolName: "write",
         input: { path: "a.txt" },
       }),
-      { toolIndex },
     );
-    const t1 = deltaOf(a[0]!).tool_calls?.[0];
-    const t2 = deltaOf(b[0]!).tool_calls?.[0];
-    expect(t1).toMatchObject({ index: 0, id: "call_1" });
-    expect(t1?.function.name).toBe("bash");
-    expect(JSON.parse(t1?.function.arguments ?? "{}")).toEqual({ command: "ls" });
-    // 第二个工具必须是 index 1，否则 App 侧会把两个调用拼成一个
-    expect(t2?.index).toBe(1);
-    expect(t2?.function.name).toBe("write");
-  });
-
-  it("同一 toolCallId 重复出现时 index 不变", () => {
-    const toolIndex = new Map<string, number>();
-    const ev = JSON.stringify({
-      type: "tool-input-available",
-      toolCallId: "call_x",
-      toolName: "bash",
-      input: { command: "pwd" },
-    });
-    const first = convertChunk(ev, { toolIndex });
-    const second = convertChunk(ev, { toolIndex });
-    expect(deltaOf(second[0]!).tool_calls?.[0]?.index).toBe(
-      deltaOf(first[0]!).tool_calls?.[0]?.index,
-    );
+    expect(out2).toHaveLength(0);
   });
 
   it("providerExecuted 的工具被跳过（App 无法驱动）", () => {
