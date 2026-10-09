@@ -24,8 +24,19 @@ function apiBase(c: Context<Env>): string {
     try {
       return new URL(origin).origin;
     } catch {
-      // 非法 Origin，回落到环境变量
+      // 非法 Origin，回落到下一级
     }
+  }
+  // 请求自身的 origin：App 的请求本来就打到本服务（如
+  // https://orion.suen.us.ci/api/agent/info），c.req.url 一定带完整地址。
+  // 这一级必须放在 PUBLIC_BASE_URL 之前——原生 HTTP 客户端（Flutter/Dio）
+  // 不发 Origin/Referer 头，环境变量一旦漏配，这里曾回落成 ""，
+  // chatUrl 变成相对路径 "/api/agent/chat"，App 端 Dio 对相对 URL 直接抛
+  // 无状态码异常，表现为「请求失败（HTTP null）」（2026-10-10 实测）。
+  try {
+    return new URL(c.req.url).origin;
+  } catch {
+    // c.req.url 异常（极端适配器场景），继续回落
   }
   return c.env.PUBLIC_BASE_URL || "";
 }

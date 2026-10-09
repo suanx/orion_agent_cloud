@@ -28,8 +28,13 @@ import {
 export const aiRoutes = new Hono<Env>();
 
 /**
- * 站点自身地址: 优先用请求头(Origin/Referer), 回落到 PUBLIC_BASE_URL。
- * App 端拿这个拼云端模型的 chatUrl, 拿不到就说明环境变量没配。
+ * 站点自身地址: 优先用请求头(Origin/Referer), 回落到请求自身 origin,
+ * 最后才是 PUBLIC_BASE_URL。
+ * App 端拿这个拼云端模型的 chatUrl。
+ *
+ * ⚠️ 必须有一级「请求自身 origin」：原生 HTTP 客户端（Flutter/Dio）不发
+ * Origin/Referer，环境变量漏配时曾回落成 ""，chatUrl 变成相对路径，
+ * App 端直接抛无状态码异常（「请求失败（HTTP null）」）。
  */
 function apiBase(c: Context<Env>): string {
   const origin = c.req.header("origin") ?? c.req.header("referer");
@@ -37,8 +42,13 @@ function apiBase(c: Context<Env>): string {
     try {
       return new URL(origin).origin;
     } catch {
-      // 非法 Origin 头, 继续回落到环境变量
+      // 非法 Origin 头, 继续回落
     }
+  }
+  try {
+    return new URL(c.req.url).origin;
+  } catch {
+    // c.req.url 异常（极端适配器场景），继续回落到环境变量
   }
   return c.env.PUBLIC_BASE_URL || "";
 }
