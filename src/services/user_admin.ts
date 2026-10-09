@@ -14,7 +14,14 @@ import { errors } from "../utils/errors";
  *
  * 清理顺序：先子表后父表（sessions 有外键，最后删）。
  */
-const CASCADE_TABLES: { table: string; label: string }[] = [
+const CASCADE_TABLES: {
+  table: string;
+  label: string;
+  /** 该表关联用户的列名，默认 user_id。 */
+  column?: string;
+  /** true = 解绑归还而非删行（用于卡密等库存资产）。 */
+  unbind?: boolean;
+}[] = [
   { table: "task_runs", label: "任务执行记录" },
   { table: "cloud_tasks", label: "云端任务" },
   { table: "kb_chunks", label: "知识库分块" },
@@ -27,7 +34,9 @@ const CASCADE_TABLES: { table: string; label: string }[] = [
   { table: "agent_sessions", label: "Agent 会话映射" },
   { table: "agent_instances", label: "Agent 实例授权" },
   { table: "devices", label: "设备" },
-  { table: "licenses", label: "卡密记录" },
+  // licenses 特殊处理（见下）：列名是 bound_user_id 而非 user_id，
+  // 且卡密是发卡库存资产 —— 删用户应解绑归还库存，而不是删行。
+  { table: "licenses", label: "卡密记录", column: "bound_user_id", unbind: true },
   { table: "sessions", label: "登录会话" },
   { table: "audit_log", label: "审计日志（该用户相关行）" },
 ];
@@ -68,13 +77,19 @@ export async function deleteUser(
 
   // 先把关联数据清空。逐表 try/catch：某张表不存在（比如老库没 migrate）
   // 不应该让整个删除失败。
-  for (const { table, label } of CASCADE_TABLES) {
+  for (const { table, label, column = "user_id", unbind } of CASCADE_TABLES) {
     if (opts.keepAudit && table === "audit_log") continue;
     try {
-      const r = await db.execute({
-        sql: `DELETE FROM ${table} WHERE user_id = ?`,
-        args: [uid],
-      });
+      // unbind 表（licenses）：解绑归还库存而非删行
+      const r = unbind
+        ? await db.execute({
+            sql: `UPDATE ${table} SET ${column} = NULL, bound_at = NULL, status = 'unused' WHERE ${column} = ?`,
+            args: [uid],
+          })
+        : await db.execute({
+            sql: `DELETE FROM ${table} WHERE ${column} = ?`,
+            args: [uid],
+          });
       if (r.rowsAffected > 0) removed[table] = r.rowsAffected;
     } catch (e) {
       // 表不存在或结构不符：记下来，不阻断主流程
@@ -119,10 +134,11 @@ export async function previewDeleteUser(
 
   const counts: Record<string, number> = {};
   let total = 0;
-  for (const { table, label } of CASCADE_TABLES) {
+  for (const { table, label, column = "user_id" } of CASCADE_TABLES) {
     try {
+      // unbind 表按解绑口径统计：该用户名下绑定中的卡密数
       const r = await db.execute({
-        sql: `SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?`,
+        sql: `SELECT COUNT(*) AS n FROM ${table} WHERE ${column} = ?`,
         args: [uid],
       });
       const n = Number(r.rows[0]?.n ?? 0);

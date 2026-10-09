@@ -36,9 +36,18 @@ async function newDb(): Promise<Client> {
        created_at INTEGER, updated_at INTEGER)`,
   );
   for (const t of TABLES) {
-    await db.execute(
-      `CREATE TABLE ${t} (user_id TEXT${t === "audit_log" ? ", action TEXT" : ""})`,
-    );
+    // licenses 真实结构：主键 code + bound_user_id（解绑制），其余表只有 user_id
+    if (t === "licenses") {
+      await db.execute(
+        `CREATE TABLE licenses (code TEXT PRIMARY KEY, plan TEXT,
+           bound_user_id TEXT, bound_at INTEGER, status TEXT DEFAULT 'unused',
+           batch TEXT DEFAULT '', created_at INTEGER)`,
+      );
+    } else {
+      await db.execute(
+        `CREATE TABLE ${t} (user_id TEXT${t === "audit_log" ? ", action TEXT" : ""})`,
+      );
+    }
   }
   // cloud_tasks 被 task_runs 引用，这里不建外键约束——
   // 真实 schema 里有，但 libsql 默认不开 foreign_keys，
@@ -52,7 +61,17 @@ async function seed(db: Client, userId: string, counts: Record<string, number>) 
     args: [userId, `${userId}@test.dev`, "x", 1000, 1000],
   });
   for (const [table, n] of Object.entries(counts)) {
-    // audit_log 额外有 action 列（非空），其余表只有 user_id
+    // audit_log 额外有 action 列（非空），licenses 按 bound_user_id 绑定，其余表只有 user_id
+    if (table === "licenses") {
+      for (let i = 0; i < n; i++) {
+        await db.execute({
+          sql: `INSERT INTO licenses (code, plan, bound_user_id, status, created_at)
+                VALUES (?, 'pro', ?, 'used', 1000)`,
+          args: [`CODE-${userId}-${i}`, userId],
+        });
+      }
+      continue;
+    }
     const cols = table === "audit_log" ? "user_id, action" : "user_id";
     const ph = table === "audit_log" ? "?, 'login'" : "?";
     for (let i = 0; i < n; i++) {
@@ -102,10 +121,34 @@ describe("deleteUser 级联清理", () => {
     const report = await deleteUser(db, "u_2");
 
     for (const t of TABLES) {
+      if (t === "licenses") continue; // licenses 是解绑制，单独断言
       const left = await countOf(db, t, "u_2");
       expect(left, `${t} 仍有残留`).toBe(0);
     }
+    // licenses：卡密行保留（库存资产），但绑定必须清空、状态回到 unused
+    const lic = await db.execute(
+      "SELECT bound_user_id, status FROM licenses WHERE code LIKE 'CODE-u_2-%'",
+    );
+    expect(lic.rows.length).toBe(3);
+    for (const row of lic.rows) {
+      expect(row.bound_user_id).toBeNull();
+      expect(row.status).toBe("unused");
+    }
+    // 其他批次/用户的卡密不受影响
+    expect(report.failed).toEqual([]);
     expect(Object.keys(report.removed).length).toBeGreaterThan(0);
+  });
+
+  it("解绑卡密不影响其他用户的绑定", async () => {
+    const db2 = db;
+    await db2.execute({
+      sql: `INSERT INTO licenses (code, plan, bound_user_id, status, created_at)
+            VALUES ('CODE-KEEP', 'pro', 'u_keep', 'used', 1000)`,
+    });
+    await seed(db, "u_9", { licenses: 2 });
+    await deleteUser(db, "u_9");
+    const kept = await db2.execute("SELECT status FROM licenses WHERE code='CODE-KEEP'");
+    expect(kept.rows[0]?.status).toBe("used");
   });
 
   it("默认保留审计日志（user_id 置空而非删行）", async () => {
