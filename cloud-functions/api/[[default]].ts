@@ -48,6 +48,39 @@ const edgeCtx = (context: EdgeOneContext) => ({
 });
 
 export const onRequest = async (context: EdgeOneContext): Promise<Response> => {
+  // 临时诊断端点（排查 502 用，修复后删除）：回传运行环境与模块加载详情
+  if (new URL(context.request.url).pathname === "/api/__diag") {
+    const out: Record<string, unknown> = { node: process.version, cwd: process.cwd() };
+    try {
+      const fs = await import("node:fs");
+      out.cwdList = fs.readdirSync(process.cwd()).slice(0, 40);
+      const parent = fs.readdirSync(process.cwd() + "/..", { withFileTypes: true })
+        .filter((d) => d.isDirectory()).map((d) => d.name).slice(0, 30);
+      out.parentDirs = parent;
+    } catch (e) {
+      out.fsErr = e instanceof Error ? e.message : String(e);
+    }
+    try {
+      const mod = await import("../../src/index");
+      out.appLoaded = true;
+      const app = (mod as { default?: { fetch: Function } }).default;
+      out.hasFetch = typeof app?.fetch === "function";
+      try {
+        const probe = await app?.fetch(new Request("https://x/api"), context.env, edgeCtx(context));
+        out.probeStatus = probe?.status;
+        out.probeBody = (await probe?.text())?.slice(0, 120);
+      } catch (e2) {
+        out.probeErr = e2 instanceof Error ? `${e2.name}: ${e2.message}` : String(e2);
+      }
+    } catch (e) {
+      out.appLoaded = false;
+      out.err = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      out.stack = e instanceof Error ? (e.stack ?? "").slice(0, 900) : "";
+    }
+    return new Response(JSON.stringify(out, null, 2), {
+      status: 200, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    });
+  }
   try {
     const mod = await import("../../src/index");
     const app = (mod as { default?: typeof mod.default & { fetch: Function } }).default
