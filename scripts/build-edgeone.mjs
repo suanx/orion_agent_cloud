@@ -42,8 +42,13 @@ await build({
   target: "node20",
   format: "esm",
   outfile: `${API_DIR}/index.mjs`,
-  // 主入口含原生绑定，生产走不到；显式 external 防止误引入。
-  external: ["@libsql/client", "libsql"],
+  // ⚠️ 只能标 libsql（原生包，含 .node 绑定）。
+  // **不要**标 `@libsql/client`——esbuild 的 external 规则会连带匹配子路径，
+  // 把 `@libsql/client/web`（生产唯一用的纯 fetch 实现）也排除出产物，
+  // 结果产物里留下运行时 `import("@libsql/client/web")`，平台解析不到
+  // 这个 bare specifier → CLOUD_FUNCTION_INVOCATION_FAILED（静态页 200、
+  // 全部 API 502）。2026-10-10 线上排查踩过这个坑。
+  external: ["libsql"],
   banner: {
     js: [
       "// 由 scripts/build-edgeone.mjs 生成，请勿手改。",
