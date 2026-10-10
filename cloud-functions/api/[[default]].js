@@ -14583,9 +14583,17 @@ var onRequest = async (context) => {
       out.cwdList = fs.readdirSync(process.cwd()).slice(0, 40);
       const parent = fs.readdirSync(process.cwd() + "/..", { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).slice(0, 30);
       out.parentDirs = parent;
+      for (const f of ["config.json", "scf_bootstrap"]) {
+        try {
+          out[f] = fs.readFileSync(process.cwd() + "/" + f, "utf8").slice(0, 1200);
+        } catch (e) {
+          out[f] = "ERR: " + (e instanceof Error ? e.message : String(e));
+        }
+      }
     } catch (e) {
       out.fsErr = e instanceof Error ? e.message : String(e);
     }
+    out.envKeys = Object.keys(process.env).filter((k) => /TURSO|ADMIN|JWT|TOKEN|DATABASE|LIBSQL/i.test(k)).sort();
     try {
       out.appLoaded = true;
       out.hasFetch = typeof index_default?.fetch === "function";

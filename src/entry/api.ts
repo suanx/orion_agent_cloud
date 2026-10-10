@@ -64,9 +64,17 @@ export const onRequest = async (context: EdgeOneContext): Promise<Response> => {
       const parent = fs.readdirSync(process.cwd() + "/..", { withFileTypes: true })
         .filter((d) => d.isDirectory()).map((d) => d.name).slice(0, 30);
       out.parentDirs = parent;
+      // 平台产物元数据：验证 maxDuration(120s) 是否真的下发（迁移核心目标）
+      for (const f of ["config.json", "scf_bootstrap"]) {
+        try { out[f] = fs.readFileSync(process.cwd() + "/" + f, "utf8").slice(0, 1200); }
+        catch (e) { out[f] = "ERR: " + (e instanceof Error ? e.message : String(e)); }
+      }
     } catch (e) {
       out.fsErr = e instanceof Error ? e.message : String(e);
     }
+    // 环境变量**键名**清单（不回传值），确认 Turso/Admin 配置已注入
+    out.envKeys = Object.keys(process.env)
+      .filter((k) => /TURSO|ADMIN|JWT|TOKEN|DATABASE|LIBSQL/i.test(k)).sort();
     try {
       out.appLoaded = true;
       out.hasFetch = typeof app?.fetch === "function";
