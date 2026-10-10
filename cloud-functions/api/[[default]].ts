@@ -30,6 +30,13 @@
  * Cron Trigger 指向 POST /api/tasks/run-due (Header: Authorization: Bearer <ADMIN_TOKEN>)。
  */
 import type { Bindings } from "../../src/env";
+// ⚠️ 必须静态 import（2026-10-10 502 排查结论）：EdgeOne 平台打包器对
+// 相对路径的动态 import() 会重写成错误路径（探针3 实测
+// "Cannot find module '/src/db/client'"），对 bare specifier 动态 import()
+// 不做内联（"Cannot find package '@libsql/client'"）。静态 import 才会被
+// 正确打包内联。原先动态引入是为了 Edge Runtime 时代的 545 诊断，
+// Node runtime 下不再需要。
+import app from "../../src/index";
 
 interface EdgeOneContext {
   request: Request;
@@ -61,9 +68,7 @@ export const onRequest = async (context: EdgeOneContext): Promise<Response> => {
       out.fsErr = e instanceof Error ? e.message : String(e);
     }
     try {
-      const mod = await import("../../src/index");
       out.appLoaded = true;
-      const app = (mod as { default?: { fetch: Function } }).default;
       out.hasFetch = typeof app?.fetch === "function";
       try {
         const probe = await app?.fetch(new Request("https://x/api"), context.env, edgeCtx(context));
@@ -82,9 +87,6 @@ export const onRequest = async (context: EdgeOneContext): Promise<Response> => {
     });
   }
   try {
-    const mod = await import("../../src/index");
-    const app = (mod as { default?: typeof mod.default & { fetch: Function } }).default
-      ?? mod.default;
     return await app.fetch(context.request, context.env, edgeCtx(context));
   } catch (e) {
     // 模块加载/初始化失败的错误原文直接返回（部署诊断期临时行为）
