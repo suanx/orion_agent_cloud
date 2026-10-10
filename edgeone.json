@@ -4,5 +4,10 @@
   "buildCommand": "npm run typecheck",
   "outputDirectory": "public",
   "installCommand": "npm install",
-  "framework": "none"
+  "framework": "none",
+  "cloudFunctions": {
+    "nodejs": {
+      "maxDuration": 120
+    }
+  }
 }
