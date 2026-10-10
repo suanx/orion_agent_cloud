@@ -2,7 +2,7 @@
 /**
  * EdgeOne Pages 部署产物构建脚本。
  *
- * 产物：cloud-functions/api/[[default]].mjs —— **完全自包含**的单文件
+ * 产物：cloud-functions/api/[[default]].js —— **完全自包含**的单文件
  * ESM bundle（内联 hono、@libsql/client/web 与全部 src/ 源码），零外部
  * import。它会作为普通"源码函数"提交进仓库，由平台源码自动构建部署。
  *
@@ -34,8 +34,8 @@ await build({
   bundle: true,
   platform: "node",
   target: "node20",
-  format: "esm",
-  outfile: "cloud-functions/api/[[default]].mjs",
+  format: "esm"  // .js + type:module => ESM；若平台按 CJS 处理会失败，届时改 cjs,
+  outfile: "cloud-functions/api/[[default]].js",
   // 无 external：hono 与 @libsql/client/web 全部内联，产物零外部 import。
   banner: {
     js: [
@@ -51,7 +51,7 @@ await build({
 // 自包含校验：产物里不允许残留任何对外部模块的引用（node: 内建除外，
 // 它们由 Node runtime 提供，永远可用）。
 import { readFileSync } from "node:fs";
-const src = readFileSync("cloud-functions/api/[[default]].mjs", "utf8");
+const src = readFileSync("cloud-functions/api/[[default]].js", "utf8");
 const badStatic = [...src.matchAll(/^\s*import\s+[^;]*?from\s+["']([^"']+)["']/gm)]
   .map((m) => m[1]).filter((s) => !s.startsWith("node:"));
 const badDynamic = [...src.matchAll(/import\(\s*["']([^"']+)["']\s*\)/g)]
@@ -62,6 +62,6 @@ if (badStatic.length || badDynamic.length) {
   process.exit(1);
 }
 console.log(
-  `[build-edgeone] ✅ cloud-functions/api/[[default]].mjs 已生成 ` +
+  `[build-edgeone] ✅ cloud-functions/api/[[default]].js 已生成 ` +
   `(${(src.length / 1024).toFixed(0)}KB，自包含)`,
 );
