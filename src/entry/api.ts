@@ -11,20 +11,26 @@
  * - `cloud-functions/` 才是 **Node.js v20 runtime**：完整 npm 生态、
  *   Streams 可用、支持 maxDuration（默认 30s，可配至 120s）。
  *
- * ⚠️ 两个必须遵守的 EdgeOne Node Functions 约定（2026-10-10 首次迁移
- * 因踩错这两点导致线上全 502，已回滚重做）：
+ * ⚠️ 三个必须遵守的 EdgeOne Node Functions 约定（2026-10-10 全天排查，
+ * 每条都以线上实测验证过）：
  * 1. catch-all 文件名必须是 `[[default]]`（**不是** Cloudflare Pages 的
- *    `[[route]]`）——平台靠这个约定识别多级通配路由。
+ *    `[[route]]`）。扩展名只认 `.js` / `.ts`——`.mjs` 不会注册路由，
+ *    /api/* 会直接落到静态 HTML。
  * 2. 入口必须 **default export** `onRequest`（官方示例：
  *    `export default function onRequest(context)`）。平台文档明确：
  *    「仅导出 onRequest / onRequestGet 等 Function Handlers 或框架实例的
  *    文件才会注册为路由」。原来的 `export const onRequest` 不会被识别。
  *    这里同时保留具名导出，供 scripts/dev-server.mjs 本地打包使用。
+ * 3. **函数文件必须零外部 import（自包含）**：平台对 cloud-functions/
+ *    源码自动构建时完全不处理 npm 依赖——哪怕只静态 import 一个 hono
+ *    也会 CLOUD_FUNCTION_INVOCATION_FAILED。因此部署产物是 esbuild
+ *    全内联 bundle（cloud-functions/api/[[default]].js，由
+ *    `npm run build` 生成并提交入仓），平台眼里它就是个零依赖函数。
  *
- * ⚠️ app 采用 onRequest 内动态 import：模块级静态 import 一旦在运行时
- * 初始化崩溃，只会返回不可读的 545 "Error return from script"；
- * 动态加载 + try/catch 后，任何模块级错误都会以 500 JSON
- * 返回错误原文，可直接定位（2026-10-08 线上 545 排查探针）。
+ * ⚠️ maxDuration=120 实测确认生效（2026-10-10 sleep 探针：挂 100s 正常
+ * 返回 200；SCF 默认超时仅 30s）。前提就是函数必须跑在
+ * `cloud-functions/`（Node v20 runtime），legacy `functions/` 目录
+ * 是 Edge Runtime，cloudFunctions 配置对它完全无效。
  *
  * EdgeOne 部署时在控制台配置环境变量(.env.example 列表),
  * Cron Trigger 指向 POST /api/tasks/run-due (Header: Authorization: Bearer <ADMIN_TOKEN>)。
@@ -55,58 +61,6 @@ const edgeCtx = (context: EdgeOneContext) => ({
 });
 
 export const onRequest = async (context: EdgeOneContext): Promise<Response> => {
-  // 临时诊断端点（排查 502 用，修复后删除）：回传运行环境与模块加载详情
-  // 临时超时探针（验证 maxDuration 是否真下发，验证后删除）：
-  // /api/__diag?sleep=40 挂 40s 再响应。SCF 默认超时 30s——能扛过 30s
-  // 说明 maxDuration 生效；被掐则配置未下发。
-  if (new URL(context.request.url).pathname === "/api/__diag") {
-    const u = new URL(context.request.url);
-    const sleepSec = Math.min(Number(u.searchParams.get("sleep") ?? 0) || 0, 115);
-    if (sleepSec > 0) {
-      await new Promise((r) => setTimeout(r, sleepSec * 1000));
-      return new Response(JSON.stringify({ slept: sleepSec, node: process.version }), {
-        status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" },
-      });
-    }
-  }
-  if (new URL(context.request.url).pathname === "/api/__diag") {
-    const out: Record<string, unknown> = { node: process.version, cwd: process.cwd() };
-    try {
-      const fs = await import("node:fs");
-      out.cwdList = fs.readdirSync(process.cwd()).slice(0, 40);
-      const parent = fs.readdirSync(process.cwd() + "/..", { withFileTypes: true })
-        .filter((d) => d.isDirectory()).map((d) => d.name).slice(0, 30);
-      out.parentDirs = parent;
-      // 平台产物元数据：验证 maxDuration(120s) 是否真的下发（迁移核心目标）
-      for (const f of ["config.json", "scf_bootstrap"]) {
-        try { out[f] = fs.readFileSync(process.cwd() + "/" + f, "utf8").slice(0, 1200); }
-        catch (e) { out[f] = "ERR: " + (e instanceof Error ? e.message : String(e)); }
-      }
-    } catch (e) {
-      out.fsErr = e instanceof Error ? e.message : String(e);
-    }
-    // 环境变量**键名**清单（不回传值），确认 Turso/Admin 配置已注入
-    out.envKeys = Object.keys(process.env)
-      .filter((k) => /TURSO|ADMIN|JWT|TOKEN|DATABASE|LIBSQL/i.test(k)).sort();
-    try {
-      out.appLoaded = true;
-      out.hasFetch = typeof app?.fetch === "function";
-      try {
-        const probe = await app?.fetch(new Request("https://x/api"), context.env, edgeCtx(context));
-        out.probeStatus = probe?.status;
-        out.probeBody = (await probe?.text())?.slice(0, 120);
-      } catch (e2) {
-        out.probeErr = e2 instanceof Error ? `${e2.name}: ${e2.message}` : String(e2);
-      }
-    } catch (e) {
-      out.appLoaded = false;
-      out.err = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-      out.stack = e instanceof Error ? (e.stack ?? "").slice(0, 900) : "";
-    }
-    return new Response(JSON.stringify(out, null, 2), {
-      status: 200, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-    });
-  }
   try {
     return await app.fetch(context.request, context.env, edgeCtx(context));
   } catch (e) {

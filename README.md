@@ -35,7 +35,7 @@
 
 ```mermaid
 flowchart LR
-    APP["📱 orion_agent\n(Flutter App)"] -- "JWT / dt_ 设备令牌" --> API["⚡ EdgeOne Cloud Function\ncloud-functions/api/[[default]].ts"]
+    APP["📱 orion_agent\n(Flutter App)"] -- "JWT / dt_ 设备令牌" --> API["⚡ EdgeOne Cloud Function\ncloud-functions/api/[[default]].js"]
     subgraph svc["Hono 路由层"]
         AUTH["auth"]
         RELAY["relay"]
@@ -121,20 +121,29 @@ npm run db:migrate
 2. 构建配置：
    - 框架预设：**None**
    - 安装命令：`npm install`
-   - 构建命令：`npm run typecheck`
+   - 构建命令：`npm run build`（esbuild 全内联 bundle，产物提交在 `cloud-functions/`）
    - 输出目录：`public`（静态页`public/index.html`；函数路由与它无关）
    - `cloud-functions/` 目录会被识别为 **Cloud Functions（Node.js runtime）**，
-     所有 `/api/*` 请求由 `cloud-functions/api/[[default]].ts` 接管
+     所有 `/api/*` 请求由 `cloud-functions/api/[[default]].js` 接管
+     （由 `src/entry/api.ts` 构建生成的**自包含** bundle，改代码请改 `src/` 再 `npm run build`）
 
    **运行时选型（2026-10-10 修正，务必遵守）**：本项目必须用 `cloud-functions/`
    （Node.js v20）。云端 Agent 中继是长挂的流式SSE 转发（单任务挂几分钟），
    legacy `functions/` 目录跑 Edge Runtime（V8，CPU 200ms、**无 maxDuration**），
    扛不住且`edgeone.json` 的 `cloudFunctions.nodejs.maxDuration` 对它无效。
+   迁到 `cloud-functions/` 后 maxDuration=120 已实测生效（sleep 探针挂 100s
+   正常返回；SCF 默认超时仅 30s）。
 
-   **Node Functions 两个易踩的约定**（踩错即线上全 502，静态页正常）：
+   **Node Functions 三个易踩的约定**（踩错即线上全 502 或路由失效，静态页正常）：
    1. catch-all 文件名必须是 `[[default]]`，**不是** Cloudflare Pages 的 `[[route]]`；
+      扩展名只认 `.js` / `.ts`（`.mjs` 不注册路由，`/api/*` 直接落静态 HTML）；
    2. 入口必须 `export default onRequest`（平台只把default export 的
-      Function Handlers 注册为路由）。
+      Function Handlers 注册为路由）；
+   3. **函数文件必须自包含（零外部 import）**：平台源码自动构建不处理 npm
+      依赖——只 `import "hono"` 也会 `CLOUD_FUNCTION_INVOCATION_FAILED`。
+      所以部署的是 esbuild 全内联 bundle，且 ESM 产物必须注入
+      `createRequire`（内联的 CJS 依赖 `ws` 会 `require("events")`，
+      否则加载即抛 "Dynamic require is not supported"）。
 3. **配置环境变量**（完整清单见 `.env.example`）：
 
    | 变量 | 必填 | 说明 |

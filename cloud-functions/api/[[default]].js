@@ -14576,55 +14576,6 @@ var edgeCtx = (context) => ({
   props: {}
 });
 var onRequest = async (context) => {
-  if (new URL(context.request.url).pathname === "/api/__diag") {
-    const u = new URL(context.request.url);
-    const sleepSec = Math.min(Number(u.searchParams.get("sleep") ?? 0) || 0, 115);
-    if (sleepSec > 0) {
-      await new Promise((r) => setTimeout(r, sleepSec * 1e3));
-      return new Response(JSON.stringify({ slept: sleepSec, node: process.version }), {
-        status: 200,
-        headers: { "content-type": "application/json", "cache-control": "no-store" }
-      });
-    }
-  }
-  if (new URL(context.request.url).pathname === "/api/__diag") {
-    const out = { node: process.version, cwd: process.cwd() };
-    try {
-      const fs = await import("node:fs");
-      out.cwdList = fs.readdirSync(process.cwd()).slice(0, 40);
-      const parent = fs.readdirSync(process.cwd() + "/..", { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).slice(0, 30);
-      out.parentDirs = parent;
-      for (const f of ["config.json", "scf_bootstrap"]) {
-        try {
-          out[f] = fs.readFileSync(process.cwd() + "/" + f, "utf8").slice(0, 1200);
-        } catch (e) {
-          out[f] = "ERR: " + (e instanceof Error ? e.message : String(e));
-        }
-      }
-    } catch (e) {
-      out.fsErr = e instanceof Error ? e.message : String(e);
-    }
-    out.envKeys = Object.keys(process.env).filter((k) => /TURSO|ADMIN|JWT|TOKEN|DATABASE|LIBSQL/i.test(k)).sort();
-    try {
-      out.appLoaded = true;
-      out.hasFetch = typeof index_default?.fetch === "function";
-      try {
-        const probe = await index_default?.fetch(new Request("https://x/api"), context.env, edgeCtx(context));
-        out.probeStatus = probe?.status;
-        out.probeBody = (await probe?.text())?.slice(0, 120);
-      } catch (e2) {
-        out.probeErr = e2 instanceof Error ? `${e2.name}: ${e2.message}` : String(e2);
-      }
-    } catch (e) {
-      out.appLoaded = false;
-      out.err = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-      out.stack = e instanceof Error ? (e.stack ?? "").slice(0, 900) : "";
-    }
-    return new Response(JSON.stringify(out, null, 2), {
-      status: 200,
-      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }
-    });
-  }
   try {
     return await index_default.fetch(context.request, context.env, edgeCtx(context));
   } catch (e) {
