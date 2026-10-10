@@ -7,11 +7,7 @@
   "framework": "none",
   "cloudFunctions": {
     "nodejs": {
-      "maxDuration": 120,
-      "externalNodeModules": [
-        "@libsql/client",
-        "libsql"
-      ]
+      "maxDuration": 120
     }
   }
 }

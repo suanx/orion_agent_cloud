@@ -31,6 +31,9 @@ for (const k of ["TURSO_DATABASE_URL", "JWT_SECRET", "ADMIN_TOKEN"]) {
     process.exit(1);
   }
 }
+// 本地开发标记：src/db/client.ts 据此允许 file: SQLite（生产恒为 false，
+// 该分支在部署产物里是死代码，原生绑定不会被打进去）。
+process.env.NODE_ENV = process.env.NODE_ENV || "development";
 
 // ---- 2. esbuild 打包 EdgeOne 函数入口（@libsql/client 保持外部依赖）----
 mkdirSync(".dev", { recursive: true });

@@ -1,8 +1,16 @@
 /**
  * 边缘函数环境变量绑定。
  * EdgeOne Pages 控制台或 .env 中配置, 见 .env.example。
+ *
+ * 注：NODE_ENV / TURSO_ALLOW_FILE_DB 仅供本地开发（dev-server、vitest）
+ * 使用，生产环境不应配置——src/db/client.ts 用它们确保 file: 本地库分支
+ * 在生产是死代码，避免 @libsql/client 的原生绑定被打进部署产物。
  */
 export interface Bindings {
+  /** 仅本地开发：允许 file: SQLite。生产留空。 */
+  TURSO_ALLOW_FILE_DB?: string;
+  /** 仅本地开发：dev-server / vitest 会注入。生产留空。 */
+  NODE_ENV?: string;
   TURSO_DATABASE_URL: string;
   TURSO_AUTH_TOKEN: string;
   JWT_SECRET: string;
