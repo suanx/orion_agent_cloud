@@ -12091,6 +12091,41 @@ var CASCADE_TABLES = [
   { table: "sessions", label: "\u767B\u5F55\u4F1A\u8BDD" },
   { table: "audit_log", label: "\u5BA1\u8BA1\u65E5\u5FD7\uFF08\u8BE5\u7528\u6237\u76F8\u5173\u884C\uFF09" }
 ];
+function buildCleanupStatements(uid, keepAudit) {
+  const stmts = [];
+  for (const { table, label, column = "user_id", unbind } of CASCADE_TABLES) {
+    if (keepAudit && table === "audit_log") continue;
+    stmts.push(
+      unbind ? {
+        // unbind 表（licenses）：解绑归还库存而非删行
+        sql: `UPDATE ${table} SET ${column} = NULL, bound_at = NULL, status = 'unused' WHERE ${column} = ?`,
+        args: [uid],
+        table,
+        label
+      } : {
+        sql: `DELETE FROM ${table} WHERE ${column} = ?`,
+        args: [uid],
+        table,
+        label
+      }
+    );
+  }
+  if (keepAudit) {
+    stmts.push({
+      sql: "UPDATE audit_log SET user_id = NULL WHERE user_id = ?",
+      args: [uid],
+      table: "audit_log",
+      label: "\u5BA1\u8BA1\u65E5\u5FD7\uFF08\u5DF2\u4FDD\u7559\uFF0C\u4EC5\u89E3\u9664\u5173\u8054\uFF09"
+    });
+  }
+  stmts.push({
+    sql: "DELETE FROM users WHERE id = ?",
+    args: [uid],
+    table: "users",
+    label: "\u7528\u6237"
+  });
+  return stmts;
+}
 async function deleteUser(db, userId, opts = {}) {
   const uid = String(userId ?? "").trim();
   if (!uid) throw errors.badRequest("userId \u4E0D\u80FD\u4E3A\u7A7A");
@@ -12102,33 +12137,31 @@ async function deleteUser(db, userId, opts = {}) {
   const email = String(found.rows[0].email ?? "");
   const removed = {};
   const failed = [];
-  for (const { table, label, column = "user_id", unbind } of CASCADE_TABLES) {
-    if (opts.keepAudit && table === "audit_log") continue;
+  const stmts = buildCleanupStatements(uid, opts.keepAudit !== false);
+  try {
+    const results = await db.batch(
+      stmts.map((s) => ({ sql: s.sql, args: s.args })),
+      "write"
+    );
+    for (let i = 0; i < stmts.length; i++) {
+      const n = results[i]?.rowsAffected ?? 0;
+      if (n > 0) removed[stmts[i].table] = n;
+    }
+    return { userId: uid, email, removed, failed };
+  } catch (e) {
+    failed.push(
+      `\u6279\u91CF\u6E05\u7406\u5931\u8D25\uFF0C\u5DF2\u56DE\u9000\u9010\u8868\u6E05\u7406\uFF1A${e instanceof Error ? e.message : String(e)}`
+    );
+    for (const k of Object.keys(removed)) delete removed[k];
+  }
+  for (const { sql, args, table, label } of stmts) {
     try {
-      const r = unbind ? await db.execute({
-        sql: `UPDATE ${table} SET ${column} = NULL, bound_at = NULL, status = 'unused' WHERE ${column} = ?`,
-        args: [uid]
-      }) : await db.execute({
-        sql: `DELETE FROM ${table} WHERE ${column} = ?`,
-        args: [uid]
-      });
+      const r = await db.execute({ sql, args });
       if (r.rowsAffected > 0) removed[table] = r.rowsAffected;
     } catch (e) {
       failed.push(`${label}(${table}): ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  if (opts.keepAudit) {
-    try {
-      const r = await db.execute({
-        sql: "UPDATE audit_log SET user_id = NULL WHERE user_id = ?",
-        args: [uid]
-      });
-      if (r.rowsAffected > 0) removed["audit_log"] = r.rowsAffected;
-    } catch {
-    }
-  }
-  await db.execute({ sql: "DELETE FROM users WHERE id = ?", args: [uid] });
-  removed["users"] = 1;
   return { userId: uid, email, removed, failed };
 }
 async function previewDeleteUser(db, userId) {
@@ -12141,7 +12174,30 @@ async function previewDeleteUser(db, userId) {
   if (!found.rows[0]) throw errors.notFound("\u7528\u6237\u4E0D\u5B58\u5728");
   const counts = {};
   let total = 0;
-  for (const { table, label, column = "user_id" } of CASCADE_TABLES) {
+  const items = CASCADE_TABLES.map(({ table, label, column = "user_id" }) => ({
+    table,
+    label,
+    column
+  }));
+  try {
+    const sql = "SELECT " + items.map((it, i) => `(SELECT COUNT(*) FROM ${it.table} WHERE ${it.column} = ?) AS c${i}`).join(", ");
+    const r = await db.execute({ sql, args: items.map(() => uid) });
+    const row = r.rows[0];
+    if (row) {
+      for (let i = 0; i < items.length; i++) {
+        const n = Number(row[`c${i}`] ?? 0);
+        if (n > 0) {
+          counts[items[i].label] = n;
+          total += n;
+        }
+      }
+      return { email: String(found.rows[0].email ?? ""), counts, total };
+    }
+  } catch {
+    for (const k of Object.keys(counts)) delete counts[k];
+    total = 0;
+  }
+  for (const { table, label, column = "user_id" } of items) {
     try {
       const r = await db.execute({
         sql: `SELECT COUNT(*) AS n FROM ${table} WHERE ${column} = ?`,
@@ -14223,14 +14279,70 @@ var VIEW_META = { dash:'\u9996\u9875', grant:'\u8D26\u53F7\u6388\u6743', ann:'\u
 // \u62BD\u5C49\u6D6E\u51FA\u65AD\u70B9, \u5FC5\u987B\u4E0E CSS @media (max-width:900px) \u4FDD\u6301\u4E00\u81F4
 var MOBILE_W = 900;
 
+/**
+ * \u7EDF\u4E00\u7684\u63A5\u53E3\u8C03\u7528\u3002
+ *
+ * \u26A0\uFE0F \u8D85\u65F6\u4FDD\u62A4\uFF082026-10-11 \u7BA1\u7406\u53F0\u300C\u5220\u9664\u5361\u6B7B\u300D\u4FEE\u590D\uFF09\uFF1A
+ * \u7BA1\u7406\u53F0\u6240\u6709\u8BF7\u6C42\u4E0E App \u7684\u4E91\u7AEF Agent \u957F\u6D41\u5171\u7528\u540C\u4E00\u4E2A\u4E91\u51FD\u6570\uFF0C\u7E41\u5FD9\u65F6\u8BF7\u6C42\u4F1A
+ * \u6392\u961F\uFF1B\u800C fetch \u9ED8\u8BA4**\u6C38\u4E0D\u8D85\u65F6** \u2014\u2014 \u8BF7\u6C42\u4E00\u6302\u8D77\uFF0C\u754C\u9762\u5C31\u6C38\u8FDC\u505C\u5728\u4E0A\u4E00\u4E2A
+ * \u72B6\u6001\uFF08\u6309\u94AE\u7981\u7528\u3001toast \u4E0D\u6D88\u5931\u3001\u5217\u8868\u7A7A\u767D\uFF09\uFF0C\u7528\u6237\u53EA\u80FD\u5F3A\u5236\u5237\u65B0\u3002\u8FD9\u91CC\u7ED9\u6BCF\u4E2A
+ * \u8BF7\u6C42\u5957\u4E0A AbortController\uFF0C\u8D85\u65F6\u540E\u629B\u51FA\u53EF\u8BFB\u9519\u8BEF\uFF0C\u754C\u9762\u603B\u80FD\u6062\u590D\u53EF\u64CD\u4F5C\u3002
+ *
+ * @param opts.timeout \u8D85\u65F6\u6BEB\u79D2\u6570\uFF0C\u9ED8\u8BA4 20s\uFF1B\u5220\u9664\u7B49\u91CD\u64CD\u4F5C\u53EF\u4F20\u66F4\u957F\u3002
+ */
 function api(path, opts) {
   opts = opts || {};
+  var timeout = opts.timeout || 20000;
   opts.headers = Object.assign({'Authorization': 'Bearer ' + TOKEN}, opts.headers || {});
   if (opts.body && typeof opts.body !== 'string') { opts.body = JSON.stringify(opts.body); opts.headers['Content-Type'] = 'application/json'; }
+
+  var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var timer = null;
+  if (ctrl) {
+    opts.signal = ctrl.signal;
+    timer = setTimeout(function() { try { ctrl.abort(); } catch (e) {} }, timeout);
+  }
+  var clear = function() { if (timer) { clearTimeout(timer); timer = null; } };
+
   return fetch(APIBASE + path, opts).then(function(r) {
+    clear();
     if (r.status === 401) { doLogout(true); throw new Error('\u4EE4\u724C\u65E0\u6548'); }
     return r.json();
+  }, function(e) { clear(); throw e; }).catch(function(e) {
+    clear();
+    if (e && e.name === 'AbortError') {
+      throw new Error('\u8BF7\u6C42\u8D85\u65F6\uFF08' + Math.round(timeout / 1000) + ' \u79D2\u65E0\u54CD\u5E94\uFF09\uFF0C\u8BF7\u91CD\u8BD5');
+    }
+    throw e;
   });
+}
+
+/**
+ * \u5E26\u8D85\u65F6\u7684 fetch \u4FE1\u53F7\uFF08\u4F9B\u767B\u5F55\u6821\u9A8C\u7B49\u4E0D\u8D70 api() \u7684\u8BF7\u6C42\u4F7F\u7528\uFF09\u3002
+ *
+ * \u9875\u9762\u521D\u59CB\u5316\u90A3\u6B21 fetch('/users') \u6B64\u524D\u662F\u88F8 fetch \u2014\u2014 \u8BF7\u6C42\u4E00\u6302\u8D77\u5C31\u65E2\u4E0D
+ * \u8FDB\u5165\u5E94\u7528\u4E5F\u4E0D\u63D0\u793A\u9519\u8BEF\uFF0C\u7BA1\u7406\u5458\u5F3A\u5236\u5237\u65B0\u540E\u53EA\u80FD\u505C\u5728\u767B\u5F55\u9875\u5E72\u7B49\uFF0C\u6B63\u662F
+ * \u300C\u5237\u65B0\u540E\u7528\u6237\u9875\u9762\u51FA\u4E0D\u6765\u300D\u7684\u6210\u56E0\u3002\u8FD9\u91CC\u8BA9\u5B83\u6700\u591A\u7B49 ms \u6BEB\u79D2\u3002
+ */
+function timeoutSignal(ms) {
+  if (typeof AbortController === 'undefined') {
+    return { signal: undefined, clear: function () {} };
+  }
+  var ctrl = new AbortController();
+  var timer = setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, ms);
+  return { signal: ctrl.signal, clear: function () { clearTimeout(timer); } };
+}
+
+/**
+ * \u8868\u683C\u52A0\u8F7D\u6001\u5360\u4F4D\u3002
+ *
+ * \u4E4B\u524D\u5217\u8868\u5728\u8BF7\u6C42\u671F\u95F4\u4FDD\u6301\u4E0A\u4E00\u6B21\u7684\u5185\u5BB9\uFF08\u9996\u6B21\u8FDB\u5165\u5219\u662F\u7A7A\u767D\uFF09\uFF0C\u7BA1\u7406\u5458\u70B9\u300C\u5237\u65B0\u300D
+ * \u6216\u5220\u9664\u540E\u770B\u4E0D\u51FA\u5230\u5E95\u5728\u4E0D\u5728\u52A0\u8F7D\uFF0C\u5BB9\u6613\u5224\u5B9A\u4E3A\u5361\u6B7B\u3002\u73B0\u5728\u5148\u843D\u4E00\u884C\u660E\u786E\u7684
+ * \u300C\u52A0\u8F7D\u4E2D\u2026\u300D\uFF0C\u8BF7\u6C42\u65E0\u8BBA\u6210\u529F\u5931\u8D25\u90FD\u4F1A\u8986\u76D6\u5B83\u3002
+ */
+function renderLoading(id, cols) {
+  var el = document.getElementById(id);
+  if (el) el.innerHTML = '<tr><td colspan="' + cols + '" class="empty">\u52A0\u8F7D\u4E2D\u2026</td></tr>';
 }
 function toast(msg) {
   var t = document.getElementById('toast');
@@ -14299,14 +14411,22 @@ function doLogin() {
   var v = document.getElementById('tk').value.trim();
   if (!v) return;
   TOKEN = v;
-  fetch(APIBASE + '/users', {headers: {'Authorization': 'Bearer ' + TOKEN}})
+  var err = document.getElementById('loginErr');
+  err.textContent = '\u9A8C\u8BC1\u4E2D\u2026';
+  var ts = timeoutSignal(15000);
+  fetch(APIBASE + '/users', {headers: {'Authorization': 'Bearer ' + TOKEN}, signal: ts.signal})
     .then(function(r) {
-      if (r.status === 401) { document.getElementById('loginErr').textContent = '\u4EE4\u724C\u65E0\u6548'; return null; }
-      if (!r.ok) { document.getElementById('loginErr').textContent = '\u670D\u52A1\u5F02\u5E38 (' + r.status + ')'; return null; }
+      ts.clear();
+      if (r.status === 401) { err.textContent = '\u4EE4\u724C\u65E0\u6548'; return null; }
+      if (!r.ok) { err.textContent = '\u670D\u52A1\u5F02\u5E38 (' + r.status + ')'; return null; }
+      err.textContent = '';
       localStorage.setItem('orion_admin_token', TOKEN);
       enterApp(); return null;
     })
-    .catch(function() { document.getElementById('loginErr').textContent = '\u7F51\u7EDC\u9519\u8BEF'; });
+    .catch(function(e) {
+      ts.clear();
+      err.textContent = (e && e.name === 'AbortError') ? '\u8FDE\u63A5\u8D85\u65F6\uFF0C\u8BF7\u91CD\u8BD5' : '\u7F51\u7EDC\u9519\u8BEF';
+    });
 }
 function doLogout(silent) {
   TOKEN = ''; localStorage.removeItem('orion_admin_token');
@@ -14410,6 +14530,7 @@ function clearAgentInstanceForm() {
   document.getElementById('aiEnabled').checked = true;
 }
 function loadAgentInstances() {
+  renderLoading('aiTable', 7);
   api('/agent-instances').then(function(r) {
     var rows = r.instances || [];
     var html = '<tr><th>\u7528\u6237</th><th>\u90AE\u7BB1</th><th>\u5B9E\u4F8B\u5730\u5740</th><th>\u663E\u793A\u540D</th><th>Key</th><th>\u72B6\u6001</th><th></th></tr>';
@@ -14464,8 +14585,11 @@ function editAgentInstance(userId) {
 }
 function deleteAgentInstance(userId) {
   if (!window.confirm('\u786E\u8BA4\u5220\u9664\u8BE5\u7528\u6237\u7684 Agent \u6388\u6743\uFF1FApp \u5185\u7684\u5165\u53E3\u4F1A\u7ACB\u5373\u6D88\u5931\u3002')) return;
-  api('/agent-instances/' + encodeURIComponent(userId), {method:'DELETE'}).then(function() {
-    toast('\u5DF2\u5220\u9664\u6388\u6743'); loadAgentInstances();
+  // \u8D85\u65F6\u7ED9\u5230 30s\uFF1A\u4E91\u51FD\u6570\u7E41\u5FD9\u65F6\u8BF7\u6C42\u4F1A\u6392\u961F\uFF0C\u4F46\u4E0D\u80FD\u8BA9\u5B83\u65E0\u9650\u6302\u8D77\u3002
+  api('/agent-instances/' + encodeURIComponent(userId), {method:'DELETE', timeout:30000}).then(function() {
+    toast('\u5DF2\u5220\u9664\u6388\u6743');
+    // \u5237\u65B0\u5931\u8D25\u4E5F\u8981\u6709\u53CD\u9988\uFF1A\u5217\u8868\u81EA\u8EAB\u7684 catch \u4F1A toast\uFF0C\u8FD9\u91CC\u4E0D\u518D\u4E8C\u6B21\u63D0\u793A\u3002
+    loadAgentInstances();
   }).catch(function(e) { toast('\u5220\u9664\u5931\u8D25: ' + e.message); });
 }
 
@@ -14679,6 +14803,7 @@ function deleteAnnouncement(id) {
 
 // ---------- \u7528\u6237 ----------
 function loadUsers() {
+  renderLoading('usrTable', 8);
   api('/users').then(function(r) {
     var rows = r.users || [];
     var html = '<tr><th>\u8D26\u53F7\u540D</th><th>\u90AE\u7BB1</th><th>\u5957\u9910</th><th>\u5230\u671F</th><th>\u8BBE\u5907</th><th>\u72B6\u6001</th><th>\u6CE8\u518C</th><th style="text-align:right;">\u64CD\u4F5C</th></tr>';
@@ -14724,7 +14849,7 @@ function confirmDeleteUser(id, email) {
     '\u5C06\u6C38\u4E45\u5220\u9664 ' + email + '\uFF0C\u5E76\u6E05\u7406\u5176\u5168\u90E8\u5173\u8054\u6570\u636E\u3002\u6B64\u64CD\u4F5C\u4E0D\u53EF\u6062\u590D\u3002';
   document.getElementById('cfImpact').textContent = '\u6B63\u5728\u7EDF\u8BA1\u2026';
   document.getElementById('confirm').classList.add('show');
-  api('/users/' + encodeURIComponent(id) + '/delete-preview').then(function(r) {
+  api('/users/' + encodeURIComponent(id) + '/delete-preview', {timeout:15000}).then(function(r) {
     // \u7EDF\u8BA1\u8BF7\u6C42\u8FD4\u56DE\u65F6\u53EF\u80FD\u5DF2\u7ECF\u6362\u4E86\u522B\u7684\u7528\u6237\uFF0C\u522B\u8986\u76D6\u65B0\u5F39\u7A97\u7684\u5185\u5BB9
     if (_pendingDeleteId !== id) return;
     var counts = r.counts || {};
@@ -14753,13 +14878,16 @@ function confirmDeleteUserOk() {
   if (!id) return;
   var btn = document.getElementById('cfOk');
   btn.disabled = true; btn.textContent = '\u5220\u9664\u4E2D\u2026';
-  api('/users/' + encodeURIComponent(id), {method:'DELETE'}).then(function(r) {
+  // \u8D85\u65F6\u7ED9\u5230 30s\uFF1A\u6E05\u7406\u6D89\u53CA\u591A\u5F20\u8868\uFF0C\u4E14\u4E91\u51FD\u6570\u7E41\u5FD9\u65F6\u4F1A\u6392\u961F\uFF0C\u4F46\u4E0D\u80FD\u65E0\u9650\u6302\u8D77
+  // \u2014\u2014 \u6302\u8D77\u4F1A\u8BA9\u6309\u94AE\u6C38\u8FDC\u505C\u5728\u300C\u5220\u9664\u4E2D\u2026\u300D\uFF08\u6B64\u524D\u7BA1\u7406\u53F0\u300C\u5361\u6B7B\u300D\u7684\u76F4\u63A5\u89C2\u611F\uFF09\u3002
+  api('/users/' + encodeURIComponent(id), {method:'DELETE', timeout:30000}).then(function(r) {
     closeConfirm();
     var n = r.removed ? Object.keys(r.removed).length : 0;
     toast('\u5DF2\u5220\u9664\uFF0C\u6E05\u7406 ' + n + ' \u5F20\u8868');
     if (r.failed && r.failed.length) toast('\u90E8\u5206\u8868\u6E05\u7406\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5: ' + r.failed.join('; '));
     loadUsers();
   }).catch(function(e) {
+    // \u65E0\u8BBA\u8D85\u65F6\u8FD8\u662F\u4E1A\u52A1\u5931\u8D25\uFF0C\u90FD\u628A\u786E\u8BA4\u6846\u4E0E\u6309\u94AE\u6062\u590D\uFF0C\u754C\u9762\u4E0D\u80FD\u7559\u5728\u6B7B\u72B6\u6001\u3002
     btn.disabled = false; btn.textContent = '\u786E\u8BA4\u5220\u9664';
     toast('\u5220\u9664\u5931\u8D25: ' + e.message);
   });
@@ -14775,6 +14903,7 @@ function closeConfirm() {
 
 // ---------- \u7528\u91CF ----------
 function loadUsage() {
+  renderLoading('usageTable', 4);
   api('/usage').then(function(r) {
     var rows = r.usage || [];
     var html = '<tr><th>\u65E5\u671F</th><th>\u7528\u6237</th><th>\u529F\u80FD</th><th>\u6B21\u6570</th></tr>';
@@ -14788,6 +14917,7 @@ function loadUsage() {
 
 // ---------- \u5BA1\u8BA1 ----------
 function loadAudit() {
+  renderLoading('auditTable', 5);
   api('/audit').then(function(r) {
     var rows = r.audit || [];
     var html = '<tr><th>\u65F6\u95F4</th><th>\u52A8\u4F5C</th><th>\u7528\u6237</th><th>\u8BE6\u60C5</th><th>IP</th></tr>';
@@ -14809,9 +14939,11 @@ function loadAudit() {
   }
   setTheme(t);
   if (TOKEN) {
-    fetch(APIBASE + '/users', {headers: {'Authorization': 'Bearer ' + TOKEN}})
-      .then(function(r) { if (r.ok) enterApp(); else doLogout(true); })
-      .catch(function() { doLogout(true); });
+    // \u81EA\u52A8\u767B\u5F55\u6821\u9A8C\u540C\u6837\u9700\u8981\u8D85\u65F6\uFF1A\u6302\u8D77\u65F6\u4E0D\u80FD\u65E2\u8FDB\u4E0D\u53BB\u53C8\u4E0D\u62A5\u9519\uFF08\u89C1 timeoutSignal \u6CE8\u91CA\uFF09
+    var ts = timeoutSignal(15000);
+    fetch(APIBASE + '/users', {headers: {'Authorization': 'Bearer ' + TOKEN}, signal: ts.signal})
+      .then(function(r) { ts.clear(); if (r.ok) enterApp(); else doLogout(true); })
+      .catch(function() { ts.clear(); doLogout(true); });
   } else {
     document.getElementById('login').style.display = 'flex';
   }

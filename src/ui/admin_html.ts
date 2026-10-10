@@ -642,14 +642,70 @@ var VIEW_META = { dash:'首页', grant:'账号授权', ann:'公告管理', prov:
 // 抽屉浮出断点, 必须与 CSS @media (max-width:900px) 保持一致
 var MOBILE_W = 900;
 
+/**
+ * 统一的接口调用。
+ *
+ * ⚠️ 超时保护（2026-10-11 管理台「删除卡死」修复）：
+ * 管理台所有请求与 App 的云端 Agent 长流共用同一个云函数，繁忙时请求会
+ * 排队；而 fetch 默认**永不超时** —— 请求一挂起，界面就永远停在上一个
+ * 状态（按钮禁用、toast 不消失、列表空白），用户只能强制刷新。这里给每个
+ * 请求套上 AbortController，超时后抛出可读错误，界面总能恢复可操作。
+ *
+ * @param opts.timeout 超时毫秒数，默认 20s；删除等重操作可传更长。
+ */
 function api(path, opts) {
   opts = opts || {};
+  var timeout = opts.timeout || 20000;
   opts.headers = Object.assign({'Authorization': 'Bearer ' + TOKEN}, opts.headers || {});
   if (opts.body && typeof opts.body !== 'string') { opts.body = JSON.stringify(opts.body); opts.headers['Content-Type'] = 'application/json'; }
+
+  var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var timer = null;
+  if (ctrl) {
+    opts.signal = ctrl.signal;
+    timer = setTimeout(function() { try { ctrl.abort(); } catch (e) {} }, timeout);
+  }
+  var clear = function() { if (timer) { clearTimeout(timer); timer = null; } };
+
   return fetch(APIBASE + path, opts).then(function(r) {
+    clear();
     if (r.status === 401) { doLogout(true); throw new Error('令牌无效'); }
     return r.json();
+  }, function(e) { clear(); throw e; }).catch(function(e) {
+    clear();
+    if (e && e.name === 'AbortError') {
+      throw new Error('请求超时（' + Math.round(timeout / 1000) + ' 秒无响应），请重试');
+    }
+    throw e;
   });
+}
+
+/**
+ * 带超时的 fetch 信号（供登录校验等不走 api() 的请求使用）。
+ *
+ * 页面初始化那次 fetch('/users') 此前是裸 fetch —— 请求一挂起就既不
+ * 进入应用也不提示错误，管理员强制刷新后只能停在登录页干等，正是
+ * 「刷新后用户页面出不来」的成因。这里让它最多等 ms 毫秒。
+ */
+function timeoutSignal(ms) {
+  if (typeof AbortController === 'undefined') {
+    return { signal: undefined, clear: function () {} };
+  }
+  var ctrl = new AbortController();
+  var timer = setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, ms);
+  return { signal: ctrl.signal, clear: function () { clearTimeout(timer); } };
+}
+
+/**
+ * 表格加载态占位。
+ *
+ * 之前列表在请求期间保持上一次的内容（首次进入则是空白），管理员点「刷新」
+ * 或删除后看不出到底在不在加载，容易判定为卡死。现在先落一行明确的
+ * 「加载中…」，请求无论成功失败都会覆盖它。
+ */
+function renderLoading(id, cols) {
+  var el = document.getElementById(id);
+  if (el) el.innerHTML = '<tr><td colspan="' + cols + '" class="empty">加载中…</td></tr>';
 }
 function toast(msg) {
   var t = document.getElementById('toast');
@@ -718,14 +774,22 @@ function doLogin() {
   var v = document.getElementById('tk').value.trim();
   if (!v) return;
   TOKEN = v;
-  fetch(APIBASE + '/users', {headers: {'Authorization': 'Bearer ' + TOKEN}})
+  var err = document.getElementById('loginErr');
+  err.textContent = '验证中…';
+  var ts = timeoutSignal(15000);
+  fetch(APIBASE + '/users', {headers: {'Authorization': 'Bearer ' + TOKEN}, signal: ts.signal})
     .then(function(r) {
-      if (r.status === 401) { document.getElementById('loginErr').textContent = '令牌无效'; return null; }
-      if (!r.ok) { document.getElementById('loginErr').textContent = '服务异常 (' + r.status + ')'; return null; }
+      ts.clear();
+      if (r.status === 401) { err.textContent = '令牌无效'; return null; }
+      if (!r.ok) { err.textContent = '服务异常 (' + r.status + ')'; return null; }
+      err.textContent = '';
       localStorage.setItem('orion_admin_token', TOKEN);
       enterApp(); return null;
     })
-    .catch(function() { document.getElementById('loginErr').textContent = '网络错误'; });
+    .catch(function(e) {
+      ts.clear();
+      err.textContent = (e && e.name === 'AbortError') ? '连接超时，请重试' : '网络错误';
+    });
 }
 function doLogout(silent) {
   TOKEN = ''; localStorage.removeItem('orion_admin_token');
@@ -829,6 +893,7 @@ function clearAgentInstanceForm() {
   document.getElementById('aiEnabled').checked = true;
 }
 function loadAgentInstances() {
+  renderLoading('aiTable', 7);
   api('/agent-instances').then(function(r) {
     var rows = r.instances || [];
     var html = '<tr><th>用户</th><th>邮箱</th><th>实例地址</th><th>显示名</th><th>Key</th><th>状态</th><th></th></tr>';
@@ -883,8 +948,11 @@ function editAgentInstance(userId) {
 }
 function deleteAgentInstance(userId) {
   if (!window.confirm('确认删除该用户的 Agent 授权？App 内的入口会立即消失。')) return;
-  api('/agent-instances/' + encodeURIComponent(userId), {method:'DELETE'}).then(function() {
-    toast('已删除授权'); loadAgentInstances();
+  // 超时给到 30s：云函数繁忙时请求会排队，但不能让它无限挂起。
+  api('/agent-instances/' + encodeURIComponent(userId), {method:'DELETE', timeout:30000}).then(function() {
+    toast('已删除授权');
+    // 刷新失败也要有反馈：列表自身的 catch 会 toast，这里不再二次提示。
+    loadAgentInstances();
   }).catch(function(e) { toast('删除失败: ' + e.message); });
 }
 
@@ -1098,6 +1166,7 @@ function deleteAnnouncement(id) {
 
 // ---------- 用户 ----------
 function loadUsers() {
+  renderLoading('usrTable', 8);
   api('/users').then(function(r) {
     var rows = r.users || [];
     var html = '<tr><th>账号名</th><th>邮箱</th><th>套餐</th><th>到期</th><th>设备</th><th>状态</th><th>注册</th><th style="text-align:right;">操作</th></tr>';
@@ -1143,7 +1212,7 @@ function confirmDeleteUser(id, email) {
     '将永久删除 ' + email + '，并清理其全部关联数据。此操作不可恢复。';
   document.getElementById('cfImpact').textContent = '正在统计…';
   document.getElementById('confirm').classList.add('show');
-  api('/users/' + encodeURIComponent(id) + '/delete-preview').then(function(r) {
+  api('/users/' + encodeURIComponent(id) + '/delete-preview', {timeout:15000}).then(function(r) {
     // 统计请求返回时可能已经换了别的用户，别覆盖新弹窗的内容
     if (_pendingDeleteId !== id) return;
     var counts = r.counts || {};
@@ -1172,13 +1241,16 @@ function confirmDeleteUserOk() {
   if (!id) return;
   var btn = document.getElementById('cfOk');
   btn.disabled = true; btn.textContent = '删除中…';
-  api('/users/' + encodeURIComponent(id), {method:'DELETE'}).then(function(r) {
+  // 超时给到 30s：清理涉及多张表，且云函数繁忙时会排队，但不能无限挂起
+  // —— 挂起会让按钮永远停在「删除中…」（此前管理台「卡死」的直接观感）。
+  api('/users/' + encodeURIComponent(id), {method:'DELETE', timeout:30000}).then(function(r) {
     closeConfirm();
     var n = r.removed ? Object.keys(r.removed).length : 0;
     toast('已删除，清理 ' + n + ' 张表');
     if (r.failed && r.failed.length) toast('部分表清理失败，请检查: ' + r.failed.join('; '));
     loadUsers();
   }).catch(function(e) {
+    // 无论超时还是业务失败，都把确认框与按钮恢复，界面不能留在死状态。
     btn.disabled = false; btn.textContent = '确认删除';
     toast('删除失败: ' + e.message);
   });
@@ -1194,6 +1266,7 @@ function closeConfirm() {
 
 // ---------- 用量 ----------
 function loadUsage() {
+  renderLoading('usageTable', 4);
   api('/usage').then(function(r) {
     var rows = r.usage || [];
     var html = '<tr><th>日期</th><th>用户</th><th>功能</th><th>次数</th></tr>';
@@ -1207,6 +1280,7 @@ function loadUsage() {
 
 // ---------- 审计 ----------
 function loadAudit() {
+  renderLoading('auditTable', 5);
   api('/audit').then(function(r) {
     var rows = r.audit || [];
     var html = '<tr><th>时间</th><th>动作</th><th>用户</th><th>详情</th><th>IP</th></tr>';
@@ -1228,9 +1302,11 @@ function loadAudit() {
   }
   setTheme(t);
   if (TOKEN) {
-    fetch(APIBASE + '/users', {headers: {'Authorization': 'Bearer ' + TOKEN}})
-      .then(function(r) { if (r.ok) enterApp(); else doLogout(true); })
-      .catch(function() { doLogout(true); });
+    // 自动登录校验同样需要超时：挂起时不能既进不去又不报错（见 timeoutSignal 注释）
+    var ts = timeoutSignal(15000);
+    fetch(APIBASE + '/users', {headers: {'Authorization': 'Bearer ' + TOKEN}, signal: ts.signal})
+      .then(function(r) { ts.clear(); if (r.ok) enterApp(); else doLogout(true); })
+      .catch(function() { ts.clear(); doLogout(true); });
   } else {
     document.getElementById('login').style.display = 'flex';
   }

@@ -50,8 +50,73 @@ export interface DeleteUserReport {
   failed: string[];
 }
 
+/** 一条待执行语句（batch 用）。 */
+interface Stmt {
+  sql: string;
+  args: unknown[];
+  /** 归属表名，用于统计 removed。 */
+  table: string;
+  label: string;
+}
+
+/**
+ * 按清理清单构造语句序列（先子表后父表）。
+ *
+ * 抽出来是为了让「批量事务」与「逐表兜底」两条路径共用同一份语句，
+ * 不出现两处 SQL 各写一遍、改一处漏一处的风险。
+ */
+function buildCleanupStatements(uid: string, keepAudit: boolean): Stmt[] {
+  const stmts: Stmt[] = [];
+  for (const { table, label, column = "user_id", unbind } of CASCADE_TABLES) {
+    // 保留审计日志时跳过 audit_log 的删除，改走下面的置空语句
+    if (keepAudit && table === "audit_log") continue;
+    stmts.push(
+      unbind
+        ? {
+            // unbind 表（licenses）：解绑归还库存而非删行
+            sql: `UPDATE ${table} SET ${column} = NULL, bound_at = NULL, status = 'unused' WHERE ${column} = ?`,
+            args: [uid],
+            table,
+            label,
+          }
+        : {
+            sql: `DELETE FROM ${table} WHERE ${column} = ?`,
+            args: [uid],
+            table,
+            label,
+          },
+    );
+  }
+  if (keepAudit) {
+    stmts.push({
+      sql: "UPDATE audit_log SET user_id = NULL WHERE user_id = ?",
+      args: [uid],
+      table: "audit_log",
+      label: "审计日志（已保留，仅解除关联）",
+    });
+  }
+  // 最后删用户本体
+  stmts.push({
+    sql: "DELETE FROM users WHERE id = ?",
+    args: [uid],
+    table: "users",
+    label: "用户",
+  });
+  return stmts;
+}
+
 /**
  * 删除一个用户及其全部关联数据。
+ *
+ * ⚠️ 性能（2026-10-11 管理台「删除卡死」修复）：
+ * 清理涉及十几张表，若逐表 `await db.execute()`，每张表都是一次
+ * EdgeOne（国内）→ Turso（ap-northeast-1）的跨域 HTTP 往返，实测单表
+ * 110~160ms、整体 2~3 秒；管理台页面此时没有任何 loading，用户看到的就是
+ * 「点删除后界面假死」。改为**一次 batch 事务**把全部语句提交，往返次数
+ * 从 ~16 次降到 1 次。
+ *
+ * batch 失败（例如老库缺表）时自动回退到逐表串行 + 逐表容错，保证
+ * 「部分表不存在也能把用户删掉」的原有语义不变。
  *
  * @param keepAudit 是否保留该用户的审计日志。审计日志用于追溯管理员
  *   操作，默认**保留**（只把 user_id 置空而非删行）—— 否则删用户会
@@ -74,45 +139,37 @@ export async function deleteUser(
 
   const removed: Record<string, number> = {};
   const failed: string[] = [];
+  const stmts = buildCleanupStatements(uid, opts.keepAudit !== false);
 
-  // 先把关联数据清空。逐表 try/catch：某张表不存在（比如老库没 migrate）
-  // 不应该让整个删除失败。
-  for (const { table, label, column = "user_id", unbind } of CASCADE_TABLES) {
-    if (opts.keepAudit && table === "audit_log") continue;
+  // ---- 快路径：一次事务批量提交 ----
+  try {
+    const results = await db.batch(
+      stmts.map((s) => ({ sql: s.sql, args: s.args as never[] })),
+      "write",
+    );
+    for (let i = 0; i < stmts.length; i++) {
+      const n = results[i]?.rowsAffected ?? 0;
+      if (n > 0) removed[stmts[i].table] = n;
+    }
+    return { userId: uid, email, removed, failed };
+  } catch (e) {
+    // 批量路径失败（多为缺表/结构不符）：清空统计，走下面的逐表兜底
+    failed.push(
+      `批量清理失败，已回退逐表清理：${e instanceof Error ? e.message : String(e)}`,
+    );
+    for (const k of Object.keys(removed)) delete removed[k];
+  }
+
+  // ---- 兜底路径：逐表串行 + 逐表 try/catch ----
+  // 某张表不存在（比如老库没 migrate）不应该让整个删除失败。
+  for (const { sql, args, table, label } of stmts) {
     try {
-      // unbind 表（licenses）：解绑归还库存而非删行
-      const r = unbind
-        ? await db.execute({
-            sql: `UPDATE ${table} SET ${column} = NULL, bound_at = NULL, status = 'unused' WHERE ${column} = ?`,
-            args: [uid],
-          })
-        : await db.execute({
-            sql: `DELETE FROM ${table} WHERE ${column} = ?`,
-            args: [uid],
-          });
+      const r = await db.execute({ sql, args: args as never[] });
       if (r.rowsAffected > 0) removed[table] = r.rowsAffected;
     } catch (e) {
-      // 表不存在或结构不符：记下来，不阻断主流程
       failed.push(`${label}(${table}): ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-
-  // 审计日志保留策略：user_id 置空，行留下
-  if (opts.keepAudit) {
-    try {
-      const r = await db.execute({
-        sql: "UPDATE audit_log SET user_id = NULL WHERE user_id = ?",
-        args: [uid],
-      });
-      if (r.rowsAffected > 0) removed["audit_log"] = r.rowsAffected;
-    } catch {
-      // 审计表异常不影响用户删除
-    }
-  }
-
-  // 最后删用户本体
-  await db.execute({ sql: "DELETE FROM users WHERE id = ?", args: [uid] });
-  removed["users"] = 1;
 
   return { userId: uid, email, removed, failed };
 }
@@ -134,9 +191,42 @@ export async function previewDeleteUser(
 
   const counts: Record<string, number> = {};
   let total = 0;
-  for (const { table, label, column = "user_id" } of CASCADE_TABLES) {
+
+  // ---- 快路径：一次往返统计全部表 ----
+  // 与 deleteUser 同理：逐表 COUNT 是十几趟跨域往返（实测预览 ~2.5s），
+  // 在管理台表现为「点删除后弹窗半天不出数字、像卡住」。合并成一条 SQL。
+  const items = CASCADE_TABLES.map(({ table, label, column = "user_id" }) => ({
+    table,
+    label,
+    column,
+  }));
+  try {
+    const sql =
+      "SELECT " +
+      items
+        .map((it, i) => `(SELECT COUNT(*) FROM ${it.table} WHERE ${it.column} = ?) AS c${i}`)
+        .join(", ");
+    const r = await db.execute({ sql, args: items.map(() => uid) as never[] });
+    const row = r.rows[0] as unknown as Record<string, unknown> | undefined;
+    if (row) {
+      for (let i = 0; i < items.length; i++) {
+        const n = Number(row[`c${i}`] ?? 0);
+        if (n > 0) {
+          counts[items[i].label] = n;
+          total += n;
+        }
+      }
+      return { email: String(found.rows[0].email ?? ""), counts, total };
+    }
+  } catch {
+    // 缺表或结构不符：清空结果，走下面的逐表兜底
+    for (const k of Object.keys(counts)) delete counts[k];
+    total = 0;
+  }
+
+  // ---- 兜底路径：逐表统计 ----
+  for (const { table, label, column = "user_id" } of items) {
     try {
-      // unbind 表按解绑口径统计：该用户名下绑定中的卡密数
       const r = await db.execute({
         sql: `SELECT COUNT(*) AS n FROM ${table} WHERE ${column} = ?`,
         args: [uid],
