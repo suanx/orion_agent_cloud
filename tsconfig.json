@@ -13,5 +13,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["functions/**/*.ts", "src/**/*.ts", "test/**/*.ts"]
+  "include": ["cloud-functions/**/*.ts", "src/**/*.ts", "test/**/*.ts"]
 }
