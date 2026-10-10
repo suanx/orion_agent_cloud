@@ -11,6 +11,18 @@ local-dev.db
 .dev/
 local-dev*.db
 live_admin.html
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.env
+*.local
+coverage/
+local.db
+.env.local
+local-dev.db
+.dev/
+local-dev*.db
+live_admin.html
 
 # EdgeOne 构建产物（scripts/build-edgeone.mjs 生成）
-.edgeone/
