@@ -56,6 +56,19 @@ const edgeCtx = (context: EdgeOneContext) => ({
 
 export const onRequest = async (context: EdgeOneContext): Promise<Response> => {
   // 临时诊断端点（排查 502 用，修复后删除）：回传运行环境与模块加载详情
+  // 临时超时探针（验证 maxDuration 是否真下发，验证后删除）：
+  // /api/__diag?sleep=40 挂 40s 再响应。SCF 默认超时 30s——能扛过 30s
+  // 说明 maxDuration 生效；被掐则配置未下发。
+  if (new URL(context.request.url).pathname === "/api/__diag") {
+    const u = new URL(context.request.url);
+    const sleepSec = Math.min(Number(u.searchParams.get("sleep") ?? 0) || 0, 115);
+    if (sleepSec > 0) {
+      await new Promise((r) => setTimeout(r, sleepSec * 1000));
+      return new Response(JSON.stringify({ slept: sleepSec, node: process.version }), {
+        status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" },
+      });
+    }
+  }
   if (new URL(context.request.url).pathname === "/api/__diag") {
     const out: Record<string, unknown> = { node: process.version, cwd: process.cwd() };
     try {

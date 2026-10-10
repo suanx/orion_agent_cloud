@@ -14577,6 +14577,17 @@ var edgeCtx = (context) => ({
 });
 var onRequest = async (context) => {
   if (new URL(context.request.url).pathname === "/api/__diag") {
+    const u = new URL(context.request.url);
+    const sleepSec = Math.min(Number(u.searchParams.get("sleep") ?? 0) || 0, 115);
+    if (sleepSec > 0) {
+      await new Promise((r) => setTimeout(r, sleepSec * 1e3));
+      return new Response(JSON.stringify({ slept: sleepSec, node: process.version }), {
+        status: 200,
+        headers: { "content-type": "application/json", "cache-control": "no-store" }
+      });
+    }
+  }
+  if (new URL(context.request.url).pathname === "/api/__diag") {
     const out = { node: process.version, cwd: process.cwd() };
     try {
       const fs = await import("node:fs");
