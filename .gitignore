@@ -26,3 +26,6 @@ local-dev*.db
 live_admin.html
 
 # EdgeOne 构建产物（scripts/build-edgeone.mjs 生成）
+
+# EdgeOne 本地构建产物（如手动跑构建脚本生成；线上用平台源码自动构建）
+.edgeone/

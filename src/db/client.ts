@@ -36,6 +36,14 @@ function fileDbAllowed(env: Bindings): boolean {
   return env.NODE_ENV === "development" || env.NODE_ENV === "test";
 }
 
+// ⚠️ 必须是静态 import（2026-10-10 线上 502 排查结论）：
+// EdgeOne 平台对 cloud-functions/ 源码做自动构建时**不内联动态 import()
+// 的依赖**——此前生产路径写成 `await import("@libsql/client/web")`，
+// 平台打包后留下运行时 import()，而产物目录里没有 node_modules →
+// CLOUD_FUNCTION_INVOCATION_FAILED（静态页 200、全部 API 502）。
+// web 变体是纯 fetch 实现无原生绑定，静态引入安全。
+import { createClient as createWebClient } from "@libsql/client/web";
+
 export async function getDb(env: Bindings): Promise<Client> {
   const url = env.TURSO_DATABASE_URL;
   if (!url) {
@@ -59,8 +67,7 @@ export async function getDb(env: Bindings): Promise<Client> {
   }
 
   // 生产路径：纯 HTTP/fetch 实现，无原生绑定。
-  const { createClient } = await import("@libsql/client/web");
-  return createClient({
+  return createWebClient({
     url,
     authToken: env.TURSO_AUTH_TOKEN || undefined,
   });
