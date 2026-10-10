@@ -65,6 +65,8 @@ agentRoutes.post("/chat", requireAuth, async (c) => {
     modelId?: string;
     messages?: { role?: string; content?: string }[];
     appSessionId?: string;
+    /** 单次回复输出上限（App 云端 Agent 配置下发 32K），透传给实例。 */
+    max_tokens?: number;
   };
   try {
     body = await c.req.json();
@@ -100,6 +102,11 @@ agentRoutes.post("/chat", requireAuth, async (c) => {
   // 该实例的部署方决定，后端无权替他收紧。
   const requestedModel = typeof body.modelId === "string" ? body.modelId.trim() : "";
   if (requestedModel) payload.modelId = requestedModel;
+  // 输出上限透传：App 侧 maxOutputTokens 以 OpenAI 风格 max_tokens 下发，
+  // 不转发的话实例侧只能吃网关默认上限，「最大输出 32K」不生效。
+  if (typeof body.max_tokens === "number" && body.max_tokens > 0) {
+    payload.max_tokens = Math.floor(body.max_tokens);
+  }
 
   let resp: Response;
   try {
