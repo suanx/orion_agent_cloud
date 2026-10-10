@@ -31,12 +31,14 @@ for (const k of ["TURSO_DATABASE_URL", "JWT_SECRET", "ADMIN_TOKEN"]) {
     process.exit(1);
   }
 }
-// 本地开发标记：src/db/client.ts 据此允许 file: SQLite（生产恒为 false，
-// 该分支在部署产物里是死代码，原生绑定不会被打进去）。
-process.env.NODE_ENV = process.env.NODE_ENV || "development";
-
-// ---- 2. esbuild 打包 EdgeOne 函数入口（@libsql/client 保持外部依赖）----
+// ---- 2. esbuild 打包 EdgeOne 函数入口 ----
+// dev-db 插件：把 src/db/client.ts（生产版，仅 web 变体、禁 file:）替换成
+// scripts/dev-db-client.ts（本地版，支持 file: SQLite、用主入口原生绑定）。
+// 生产构建器看不到 dev-db-client.ts，原生绑定永远不会进平台产物。
+// （2026-10-10：平台构建器对解析不了的动态 import 会直接构建失败，所以
+// 生产 client.ts 必须零动态 import，file: 支持只能拆到这里。）
 mkdirSync(".dev", { recursive: true });
+const devDbClient = readFileSync("scripts/dev-db-client.ts", "utf8");
 await build({
   entryPoints: ["cloud-functions/api/[[default]].ts"],
   bundle: true,
@@ -44,6 +46,18 @@ await build({
   format: "cjs",
   outfile: ".dev/server.cjs",
   external: ["@libsql/client"],
+  plugins: [
+    {
+      name: "dev-db-client",
+      setup(b) {
+        b.onLoad({ filter: /src[\\/]db[\\/]client\.ts$/ }, () => ({
+          contents: devDbClient,
+          loader: "ts",
+          resolveDir: "scripts",
+        }));
+      },
+    },
+  ],
   logLevel: "silent",
 });
 const mod = await import("../.dev/server.cjs");
