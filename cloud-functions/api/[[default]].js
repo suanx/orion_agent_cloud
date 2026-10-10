@@ -12962,6 +12962,8 @@ function convertStream(upstream) {
   let pendingRead = null;
   const KEEPALIVE_MS = 12e3;
   const KEEPALIVE_FRAME = encoder3.encode(": keepalive\n\n");
+  const TOTAL_DEADLINE_MS = 105e3;
+  const startedAt = Date.now();
   const drainBuffer = (controller) => {
     let sawDone = false;
     let idx;
@@ -12980,28 +12982,56 @@ function convertStream(upstream) {
     }
     return sawDone;
   };
-  return new ReadableStream({
-    async pull(controller) {
-      if (finished) return;
+  const pump = async (controller) => {
+    const finishStream = () => {
+      finished = true;
       try {
-        if (!pendingRead) pendingRead = reader.read();
-        let result;
-        for (; ; ) {
-          let timer;
-          const idle = new Promise((resolve) => {
-            timer = setTimeout(() => resolve("idle"), KEEPALIVE_MS);
+        controller.enqueue(encoder3.encode(DONE));
+        controller.close();
+      } catch {
+      }
+    };
+    try {
+      for (; ; ) {
+        if (finished) return;
+        if (Date.now() - startedAt > TOTAL_DEADLINE_MS) {
+          void reader.cancel("relay total deadline reached").catch(() => {
           });
-          const raced = await Promise.race([pendingRead, idle]);
-          clearTimeout(timer);
-          if (raced === "idle") {
-            controller.enqueue(KEEPALIVE_FRAME);
-            continue;
+          try {
+            controller.enqueue(
+              encoder3.encode(
+                chunk(
+                  {
+                    content: "\n\n\u26A0\uFE0F \u4E91\u7AEF Agent \u54CD\u5E94\u8D85\u65F6\uFF1A105 \u79D2\u5185\u672A\u5B8C\u6210\u672C\u6B21\u4EFB\u52A1\uFF0C\u8FDE\u63A5\u5DF2\u4E3B\u52A8\u5173\u95ED\uFF08\u907F\u514D\u5E73\u53F0\u5F3A\u6740\u5BFC\u81F4\u8BF7\u6C42\u5931\u8D25\uFF09\u3002\u6A21\u578B\u7F51\u5173\u53EF\u80FD\u6392\u961F\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002"
+                  },
+                  "stop"
+                )
+              )
+            );
+          } catch {
+            return;
           }
-          result = raced;
-          pendingRead = null;
-          break;
+          finishStream();
+          return;
         }
-        const { done, value } = result;
+        if (!pendingRead) pendingRead = reader.read();
+        let timer;
+        const idle = new Promise((resolve) => {
+          timer = setTimeout(() => resolve("idle"), KEEPALIVE_MS);
+        });
+        const raced = await Promise.race([pendingRead, idle]);
+        clearTimeout(timer);
+        if (finished) return;
+        if (raced === "idle") {
+          try {
+            controller.enqueue(KEEPALIVE_FRAME);
+          } catch {
+            return;
+          }
+          continue;
+        }
+        pendingRead = null;
+        const { done, value } = raced;
         if (done) {
           const tail = buffer.trim();
           if (tail.startsWith("data:")) {
@@ -13012,20 +13042,22 @@ function convertStream(upstream) {
               }
             }
           }
-          finished = true;
-          controller.enqueue(encoder3.encode(DONE));
-          controller.close();
+          finishStream();
           return;
         }
         buffer += decoder.decode(value, { stream: true });
         if (drainBuffer(controller)) {
-          finished = true;
-          controller.enqueue(encoder3.encode(DONE));
-          controller.close();
+          void reader.cancel("upstream done").catch(() => {
+          });
+          finishStream();
+          return;
         }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        finished = true;
+      }
+    } catch (e) {
+      if (finished) return;
+      const msg = e instanceof Error ? e.message : String(e);
+      finished = true;
+      try {
         controller.enqueue(
           encoder3.encode(chunk({ content: `
 
@@ -13033,7 +13065,13 @@ function convertStream(upstream) {
         );
         controller.enqueue(encoder3.encode(DONE));
         controller.close();
+      } catch {
       }
+    }
+  };
+  return new ReadableStream({
+    start(controller) {
+      void pump(controller);
     },
     cancel(reason) {
       finished = true;
