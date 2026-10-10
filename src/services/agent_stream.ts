@@ -170,6 +170,21 @@ export function convertStream(
   const KEEPALIVE_MS = 12_000;
   const KEEPALIVE_FRAME = encoder.encode(": keepalive\n\n");
 
+  /** 总时长硬截止（2026-10-10 根因修复）。
+   *
+   * EdgeOne Cloud Functions maxDuration 平台上限 120s（官方 10~120s，
+   * 无法调高）：超时后平台强杀整个函数，客户端收到的是**不可解析的
+   * 504 HTML 页**（App 表现为请求失败/一直转圈）。此前 forge 侧看门狗
+   * 也是 120s，与平台上限同归于尽——看门狗永远慢一步，可读错误永远
+   * 到不了客户端（2026-10-10 端到端实测 504@122s）。
+   *
+   * 现在中继在 105s 主动收尾：给上游留 ~15s 余量的同时，保证以一条
+   * OpenAI 兼容的错误 chunk + [DONE] 正常关流，App 能解析出明确提示。
+   * forge 侧模型看门狗 80s 会先触发并送达真正的根因文案；本截止只兜
+   * 「forge 整体静默/超长任务」的底。 */
+  const TOTAL_DEADLINE_MS = 105_000;
+  const startedAt = Date.now();
+
   /** 处理缓冲区里的完整事件，返回是否已收到 [DONE]。 */
   const drainBuffer = (controller: ReadableStreamDefaultController<Uint8Array>): boolean => {
     let sawDone = false;
@@ -204,6 +219,28 @@ export function convertStream(
         if (!pendingRead) pendingRead = reader.read();
         let result: ReadableStreamReadResult<Uint8Array>;
         for (;;) {
+          // 总时长兜底：到 105s 仍未读完，主动发错误提示并关流，
+          // 抢在 EdgeOne 120s 平台强杀之前（见 TOTAL_DEADLINE_MS 注释）。
+          if (Date.now() - startedAt > TOTAL_DEADLINE_MS) {
+            finished = true;
+            void reader.cancel("relay total deadline reached").catch(() => {});
+            controller.enqueue(
+              encoder.encode(
+                chunk(
+                  {
+                    content:
+                      "\n\n⚠️ 云端 Agent 响应超时：105 秒内未完成本次任务，" +
+                      "连接已主动关闭（避免平台强杀导致请求失败）。" +
+                      "模型网关可能排队，请稍后重试。",
+                  },
+                  "stop",
+                ),
+              ),
+            );
+            controller.enqueue(encoder.encode(DONE));
+            controller.close();
+            return;
+          }
           let timer: ReturnType<typeof setTimeout> | undefined;
           const idle = new Promise<"idle">((resolve) => {
             timer = setTimeout(() => resolve("idle"), KEEPALIVE_MS);
