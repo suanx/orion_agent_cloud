@@ -2,6 +2,10 @@
 // 改动请编辑 src/ 与构建脚本后重新构建并提交。
 // 平台约束见 scripts/build-edgeone.mjs 头注释：函数必须自包含，
 // 平台源码自动构建不处理 npm 依赖（2026-10-10 探针实测）。
+// createRequire：ESM 产物里被内联的 CJS 依赖（ws 等）仍会 require('events')
+// 等 node 内建，esbuild 默认抛 'Dynamic require is not supported' → 必须注入。
+import { createRequire as __cr } from "node:module";
+const require = __cr(import.meta.url);
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;

@@ -34,7 +34,7 @@ await build({
   bundle: true,
   platform: "node",
   target: "node20",
-  format: "esm"  // .js + type:module => ESM；若平台按 CJS 处理会失败，届时改 cjs,
+  format: "esm", // .js + type:module => ESM；若平台按 CJS 处理会失败，届时改 cjs
   outfile: "cloud-functions/api/[[default]].js",
   // 无 external：hono 与 @libsql/client/web 全部内联，产物零外部 import。
   banner: {
@@ -43,6 +43,10 @@ await build({
       "// 改动请编辑 src/ 与构建脚本后重新构建并提交。",
       "// 平台约束见 scripts/build-edgeone.mjs 头注释：函数必须自包含，",
       "// 平台源码自动构建不处理 npm 依赖（2026-10-10 探针实测）。",
+      "// createRequire：ESM 产物里被内联的 CJS 依赖（ws 等）仍会 require('events')",
+      "// 等 node 内建，esbuild 默认抛 'Dynamic require is not supported' → 必须注入。",
+      'import { createRequire as __cr } from "node:module";',
+      "const require = __cr(import.meta.url);",
     ].join("\n"),
   },
   logLevel: "error",
