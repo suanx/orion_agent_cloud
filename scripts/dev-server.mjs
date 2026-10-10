@@ -3,7 +3,7 @@
  * 本地部署开发服务器 —— 在真机 Node 上跑完整后端（非 mock）。
  *
  * 用途：部署到 EdgeOne 前的全端点本地验证（数据库用本地 SQLite 文件）。
- * 忠实模拟部署链路：请求交给 functions/api/[[route]].ts 的 onRequest
+ * 忠实模拟部署链路：请求交给 cloud-functions/api/[[route]].ts 的 onRequest
  * （与 EdgeOne 线上完全同一份入口代码），再进 Hono app。
  * 环境变量与 EdgeOne 控制台配置的 Bindings 同名（见 .env.example）。
  *
@@ -35,7 +35,7 @@ for (const k of ["TURSO_DATABASE_URL", "JWT_SECRET", "ADMIN_TOKEN"]) {
 // ---- 2. esbuild 打包 EdgeOne 函数入口（@libsql/client 保持外部依赖）----
 mkdirSync(".dev", { recursive: true });
 await build({
-  entryPoints: ["functions/api/[[route]].ts"],
+  entryPoints: ["cloud-functions/api/[[route]].ts"],
   bundle: true,
   platform: "node",
   format: "cjs",
@@ -46,7 +46,7 @@ await build({
 const mod = await import("../.dev/server.cjs");
 const onRequest = mod.onRequest ?? mod.default?.onRequest;
 if (typeof onRequest !== "function") {
-  console.error("打包产物中没有 onRequest —— 检查 functions/api/[[route]].ts");
+  console.error("打包产物中没有 onRequest —— 检查 cloud-functions/api/[[route]].ts");
   process.exit(1);
 }
 

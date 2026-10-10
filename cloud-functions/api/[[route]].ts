@@ -1,10 +1,21 @@
 /**
- * EdgeOne Pages Functions 入口 (Cloudflare Pages Functions 兼容约定)。
+ * EdgeOne Pages **Cloud Functions**（Node.js runtime）入口。
  * 所有 /api/* 请求交给 Hono app 处理。
  *
- * ⚠️ app 采用 onRequest 内动态 import：模块级静态 import 一旦在边缘运行时
- * 初始化崩溃（如原生绑定），EdgeOne 只会返回不可读的 545 "Error return
- * from script"；动态加载 + try/catch 后，任何模块级错误都会以 500 JSON
+ * 为什么在 cloud-functions/ 而不是旧的 functions/（2026-10-10）：
+ * - `functions/` 是 EdgeOne 的legacy 路径，跑 **Edge Runtime (V8)**，
+ *   CPU 配额仅 200ms、代码 5MB、body 1MB，且不提供 maxDuration 配置；
+ *   `edgeone.json` 里的 `cloudFunctions.nodejs.maxDuration` 对它无效。
+ * - `cloud-functions/` 才是 **Node.js v20 runtime**：完整 npm 生态、
+ *   Streams 可用、支持 `maxDuration`（默认 30s，可配至 120s）。
+ * 云端 Agent 中继是「长挂的流式 SSE 转发」（一次任务挂几分钟），
+ * 必须跑 Node.js runtime 才能吃到 120s 上限——2026-10-10 用户实测
+ * v0.2.49（30s→120s 修复上线）云端 Agent 仍「重连 4 次全失败」，
+ * 即旧目录导致该配置从未生效。
+ *
+ * ⚠️ app 采用 onRequest 内动态 import：模块级静态 import 一旦在运行时
+ * 初始化崩溃，只会返回不可读的 545 "Error return from script"；
+ * 动态加载 + try/catch 后，任何模块级错误都会以 500 JSON
  * 返回错误原文，可直接定位（2026-10-08 线上 545 排查探针）。
  *
  * EdgeOne 部署时在控制台配置环境变量(.env.example 列表),
