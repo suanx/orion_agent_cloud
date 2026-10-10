@@ -35,7 +35,7 @@
 
 ```mermaid
 flowchart LR
-    APP["📱 orion_agent\n(Flutter App)"] -- "JWT / dt_ 设备令牌" --> API["⚡ EdgeOne 边缘函数\nfunctions/api/[[route]].ts"]
+    APP["📱 orion_agent\n(Flutter App)"] -- "JWT / dt_ 设备令牌" --> API["⚡ EdgeOne Cloud Function\ncloud-functions/api/[[default]].ts"]
     subgraph svc["Hono 路由层"]
         AUTH["auth"]
         RELAY["relay"]
@@ -122,9 +122,19 @@ npm run db:migrate
    - 框架预设：**None**
    - 安装命令：`npm install`
    - 构建命令：`npm run typecheck`
-   - 输出目录：`dist`（纯函数项目，留空亦可）
-   - `functions/` 目录会被自动识别为**边缘函数**（Cloudflare Pages Functions 兼容约定），
-     所有 `/api/*` 请求由 `functions/api/[[route]].ts` 接管
+   - 输出目录：`public`（静态页`public/index.html`；函数路由与它无关）
+   - `cloud-functions/` 目录会被识别为 **Cloud Functions（Node.js runtime）**，
+     所有 `/api/*` 请求由 `cloud-functions/api/[[default]].ts` 接管
+
+   **运行时选型（2026-10-10 修正，务必遵守）**：本项目必须用 `cloud-functions/`
+   （Node.js v20）。云端 Agent 中继是长挂的流式SSE 转发（单任务挂几分钟），
+   legacy `functions/` 目录跑 Edge Runtime（V8，CPU 200ms、**无 maxDuration**），
+   扛不住且`edgeone.json` 的 `cloudFunctions.nodejs.maxDuration` 对它无效。
+
+   **Node Functions 两个易踩的约定**（踩错即线上全 502，静态页正常）：
+   1. catch-all 文件名必须是 `[[default]]`，**不是** Cloudflare Pages 的 `[[route]]`；
+   2. 入口必须 `export default onRequest`（平台只把default export 的
+      Function Handlers 注册为路由）。
 3. **配置环境变量**（完整清单见 `.env.example`）：
 
    | 变量 | 必填 | 说明 |
