@@ -116,6 +116,27 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   PRIMARY KEY (user_id, app_session_id)
 );
 
+-- ============ 云端 Agent 异步任务 (2026-10-11 长任务异步化) ============
+--
+-- 为什么需要：EdgeOne Cloud Functions 单次请求硬上限 120s，长任务不可能靠
+-- 一条流挂到底。改为「提交即返回 + 带游标轮询」：本表只存任务元数据，
+-- 输出内容不存在中继——forge 的 workflow run 流本身是持久化日志，任意
+-- 时刻可用 getReadable({startIndex}) 从任意游标重读，故无需 KV / 回调。
+CREATE TABLE IF NOT EXISTS agent_tasks (
+  task_id        TEXT PRIMARY KEY,               -- = forge workflow runId (wrun_xxx)
+  user_id        TEXT NOT NULL,
+  chat_id        TEXT NOT NULL,                  -- forge chatId
+  app_session_id TEXT NOT NULL,                  -- App 侧会话 id，用于重开续接
+  status         TEXT NOT NULL DEFAULT 'running',-- running | done | failed | stopped
+  cursor         INTEGER NOT NULL DEFAULT 0,     -- 已下发给 App 的 forge chunk 数
+  error          TEXT,
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL,
+  finished_at    INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_agent_tasks_user   ON agent_tasks(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_tasks_active ON agent_tasks(user_id, status);
+
 -- ============ 云端定时任务 ============
 
 CREATE TABLE IF NOT EXISTS cloud_tasks (

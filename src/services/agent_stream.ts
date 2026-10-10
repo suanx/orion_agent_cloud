@@ -50,29 +50,32 @@ function chunk(delta: Record<string, unknown>, finishReason: string | null): str
 }
 
 /**
- * 转换单个 AI SDK 事件为 0~n 个 OpenAI 兼容 SSE 片段。
- * 返回空数组表示该事件无需转发。
+ * 单个 AI SDK 事件 → OpenAI delta 对象（供 App 渲染）。
+ * 返回 null 表示该事件无需转发（工具事件、边界事件等）。
+ *
+ * 抽出来是为了让**轮询路径复用同一套映射**——流式与轮询下发给 App 的
+ * delta 形态必须完全一致，否则 App 要写两套渲染逻辑。
  */
-export function convertChunk(raw: string): string[] {
+export function chunkToDelta(raw: string): Record<string, unknown> | null {
   let event: AiSdkChunk;
   try {
     event = JSON.parse(raw) as AiSdkChunk;
   } catch {
-    return []; // 半截 JSON（SSE 分包）或非对象，直接忽略
+    return null; // 半截 JSON（SSE 分包）或非对象，直接忽略
   }
-  if (!event || typeof event.type !== "string") return [];
+  if (!event || typeof event.type !== "string") return null;
 
   switch (event.type) {
     case "text-delta": {
       const text = event.delta ?? event.text ?? "";
-      if (!text) return [];
-      return [chunk({ content: text }, null)];
+      if (!text) return null;
+      return { content: text };
     }
 
     case "reasoning-delta": {
       const text = event.delta ?? event.text ?? "";
-      if (!text) return [];
-      return [chunk({ reasoning_content: text }, null)];
+      if (!text) return null;
+      return { reasoning_content: text };
     }
 
     case "tool-input-available": {
@@ -89,7 +92,7 @@ export function convertChunk(raw: string): string[] {
       //
       // providerExecuted 的平台工具（如网页搜索）本来就该丢；此处对
       // 本地工具一并丢弃——App 只消费最终文本，工具过程信息不下发。
-      return [];
+      return null;
     }
 
     // 工具审批请求：App 场景下 orion-forge 已被配置为自动放行（见
@@ -98,15 +101,17 @@ export function convertChunk(raw: string): string[] {
     // "Agent 在等一个没人点的确认"，好过流静默停住看不出原因。
     case "tool-approval-request": {
       const name = event.toolName || "某个操作";
-      return [
-        chunk({ content: `\n\n⚠️ Agent 请求确认「${name}」，但当前调用方无法应答审批，已跳过。` }, null),
-      ];
+      return {
+        content: `\n\n⚠️ Agent 请求确认「${name}」，但当前调用方无法应答审批，已跳过。`,
+      };
     }
 
-    // 客户端主动中断：AI SDK 给 abort 而非 finish，不转成 stop ——
-    // 转了会让 App 把「被取消」误认为「正常结束」。
+    // 客户端主动中断 / 正常结束 / 出错：delta 为空，终止语义见
+    // terminalOf()——abort 不能转成 stop，否则 App 会把「被取消」误认
+    // 为「正常结束」。
     case "abort":
-      return [DONE];
+    case "finish":
+      return null;
 
     case "tool-output-available":
     case "tool-input-start":
@@ -124,24 +129,65 @@ export function convertChunk(raw: string): string[] {
     case "start":
     case "start-step":
     case "finish-step":
-      return []; // App 侧不需要这些中间态
+      return null; // App 侧不需要这些中间态
 
     // source-url / source-document（引用来源）：App 无对应展示位，
     // 丢弃即可。若日后要显示引用，需在 App 侧加事件类型。
-
-    case "finish":
-      return [chunk({}, "stop"), DONE];
 
     case "error": {
       // 以正常收尾结束，把错误作为正文回传 —— App 拿到的是可读提示，
       // 而不是半截流突然中断。
       const msg = event.errorText || "Agent 执行出错";
-      return [chunk({ content: `\n\n⚠️ ${msg}` }, "stop"), DONE];
+      return { content: `\n\n⚠️ ${msg}` };
     }
 
     default:
-      return [];
+      return null;
   }
+}
+
+/**
+ * 事件的终止语义：null = 流继续；"stop" = 正常收尾；"done" = 只补 [DONE]。
+ * 与 chunkToDelta 分开是为了让轮询路径也能判断终态。
+ */
+export function terminalOf(raw: string): "stop" | "done" | null {
+  let event: AiSdkChunk;
+  try {
+    event = JSON.parse(raw) as AiSdkChunk;
+  } catch {
+    return null;
+  }
+  if (!event || typeof event.type !== "string") return null;
+  if (event.type === "finish") return "stop";
+  if (event.type === "error") return "stop";
+  if (event.type === "abort") return "done";
+  return null;
+}
+
+/**
+ * 转换单个 AI SDK 事件为 0~n 个 OpenAI 兼容 SSE 片段（流式路径用）。
+ * 返回空数组表示该事件无需转发。
+ */
+export function convertChunk(raw: string): string[] {
+  const delta = chunkToDelta(raw);
+  const terminal = terminalOf(raw);
+  const out: string[] = [];
+  if (delta && Object.keys(delta).length > 0) out.push(chunk(delta, null));
+  if (terminal === "stop") {
+    out.push(chunk({}, "stop"), DONE);
+  } else if (terminal === "done") {
+    out.push(DONE);
+  }
+  return out;
+}
+
+export interface ConvertStreamOptions {
+  /**
+   * forge workflow runId（= 异步任务 id）。给了它，105s 兜底就不是「报错
+   * 关流」而是「降级信号」：额外发一帧 task_fallback，App 据此改为轮询
+   * GET /agent/tasks/:id/status?from=... 把剩余输出接完。
+   */
+  taskId?: string;
 }
 
 /**
@@ -151,12 +197,15 @@ export function convertChunk(raw: string): string[] {
  */
 export function convertStream(
   upstream: ReadableStream<Uint8Array>,
+  options: ConvertStreamOptions = {},
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   let buffer = "";
   // 兜底：上游异常/提前结束时补一个 [DONE]，否则 App 会一直等下去
   let finished = false;
+  /** 已消费的 forge chunk 数 = 下次轮询的 startIndex（forge 流下标）。 */
+  let consumedChunks = 0;
 
   const reader = upstream.getReader();
   // 进行中的上游读取：keepalive 空转期间 read() 的 Promise 必须缓存复用，
@@ -198,6 +247,9 @@ export function convertStream(
         if (!trimmed.startsWith("data:")) continue;
         const payload = trimmed.slice(5).trim();
         if (!payload || payload === "[DONE]") continue;
+        // 每个 UI chunk 都占 forge 流的一个下标（不管有没有转成 delta），
+        // 所以计数必须在转换之前——它才是轮询续接的正确游标。
+        consumedChunks += 1;
         const out = convertChunk(payload);
         for (const piece of out) controller.enqueue(encoder.encode(piece));
         if (out.some((p) => p.includes("[DONE]"))) sawDone = true;
@@ -245,19 +297,37 @@ export function convertStream(
         if (Date.now() - startedAt > TOTAL_DEADLINE_MS) {
           void reader.cancel("relay total deadline reached").catch(() => {});
           try {
-            controller.enqueue(
-              encoder.encode(
-                chunk(
-                  {
-                    content:
-                      "\n\n⚠️ 云端 Agent 响应超时：105 秒内未完成本次任务，" +
-                      "连接已主动关闭（避免平台强杀导致请求失败）。" +
-                      "模型网关可能排队，请稍后重试。",
-                  },
-                  "stop",
+            if (options.taskId) {
+              // 降级而不是失败：告诉 App「任务还在跑，改轮询接着取」。
+              // from = 已消费的 forge chunk 数，正好是轮询的起始下标。
+              controller.enqueue(
+                encoder.encode(
+                  chunk(
+                    {
+                      task_fallback: {
+                        taskId: options.taskId,
+                        from: consumedChunks,
+                      },
+                    },
+                    "task_fallback",
+                  ),
                 ),
-              ),
-            );
+              );
+            } else {
+              controller.enqueue(
+                encoder.encode(
+                  chunk(
+                    {
+                      content:
+                        "\n\n⚠️ 云端 Agent 响应超时：105 秒内未完成本次任务，" +
+                        "连接已主动关闭（避免平台强杀导致请求失败）。" +
+                        "模型网关可能排队，请稍后重试。",
+                    },
+                    "stop",
+                  ),
+                ),
+              );
+            }
           } catch {
             return;
           }

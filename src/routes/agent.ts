@@ -13,8 +13,22 @@ import {
   toPublicAgentInfo,
   getInstance,
 } from "../services/agent_instances";
-import { convertStream } from "../services/agent_stream";
+import { chunkToDelta, convertStream } from "../services/agent_stream";
 import { consumeWeeklyQuota } from "../services/quota";
+import {
+  advanceTask,
+  listActiveTasks,
+  mapRunStatus,
+  upsertTask,
+  type AgentTask,
+  getTask,
+} from "../services/agent_tasks";
+
+/**
+ * forge 的 workflow run 状态 → 本服务任务状态（已在本文件内映射）。
+ * 轮询端点用得上，这里给个别名方便阅读。
+ */
+const statusOfRun = mapRunStatus;
 
 export const agentRoutes = new Hono<Env>();
 
@@ -153,7 +167,20 @@ agentRoutes.post("/chat", requireAuth, async (c) => {
     throw errors.internal("Agent 实例未返回流");
   }
 
-  return new Response(convertStream(resp.body), {
+  // 异步化衔接（2026-10-11）：forge 在响应头里给 workflow runId，中继据此
+  // 登记任务。这样即使本次流被 105s 兜底截断，App 也能拿着同一个 taskId
+  // 改走轮询把剩余输出接完（混和模式：先流式，超时降级）。
+  const runId = resp.headers.get("x-workflow-run-id");
+  if (runId && appSessionId) {
+    await upsertTask(db, {
+      taskId: runId,
+      userId: user.userId,
+      chatId: remoteChat ?? "",
+      appSessionId,
+    });
+  }
+
+  return new Response(convertStream(resp.body, { taskId: runId ?? undefined }), {
     status: 200,
     headers: {
       "content-type": "text/event-stream; charset=utf-8",
@@ -162,8 +189,278 @@ agentRoutes.post("/chat", requireAuth, async (c) => {
       // App 端靠这两个头把本次消耗同步进额度卡片
       "x-orion-quota-used": String(quota.used),
       "x-orion-quota-limit": String(quota.limit),
+      // 任务 id：App 拿它在流被截断/退后台后继续轮询
+      ...(runId ? { "x-orion-task-id": runId } : {}),
     },
   });
+});
+
+// ============ 云端 Agent 异步任务（2026-10-11 长任务异步化） ============
+//
+// EdgeOne Cloud Functions 单次请求硬上限 120s，长任务不可能靠一条流挂到
+// 底。这里提供「提交即返回 + 带游标轮询」的完整异步通道：
+//   ① POST /agent/tasks              启动任务，立刻返回 taskId
+//   ② GET  /agent/tasks/:id/status   带 from 游标取增量输出
+//   ③ GET  /agent/tasks              列出未完成任务（App 重开自动续接）
+//   ④ POST /agent/tasks/:id/stop     取消
+//
+// 输出内容不落中继：forge 的 workflow run 流本身是持久化日志，任意时刻
+// 可用 getReadable({startIndex}) 从任意游标重读，故无需 KV / 后端回调。
+
+/** 取实例凭据（base + 解密后的 key）。 */
+async function agentCreds(c: Context<Env>) {
+  const user = c.get("user");
+  const instance = await requireInstance(c.get("db"), user.userId);
+  const apiKey = await decryptSecret(c.env.JWT_SECRET, instance.api_key_enc);
+  return { base: instance.base_url.replace(/\/+$/, ""), key: apiKey };
+}
+
+/**
+ * POST /agent/tasks
+ * 启动一个 Agent 任务，立刻返回 taskId（不等待任务完成）。
+ *
+ * forge 的 /api/agent/chat 语义本就是「start() 后 workflow 独立存活」，
+ * 响应头一到就能拿到 x-workflow-run-id；中继读完头即取消响应体——
+ * 取消的只是本条流视图，run 照常在 Vercel 上跑（现有 105s 截断后
+ * App 重连同一 run 的设计已在生产验证过这一点）。
+ */
+agentRoutes.post("/tasks", requireAuth, async (c) => {
+  const user = c.get("user");
+  const db = c.get("db");
+
+  let body: {
+    messages?: { role?: string; content?: string }[];
+    appSessionId?: string;
+    modelId?: string;
+    max_tokens?: number;
+  };
+  try {
+    body = await c.req.json();
+  } catch {
+    throw errors.badRequest("请求体不是合法 JSON");
+  }
+  if (!Array.isArray(body.messages) || body.messages.length === 0) {
+    throw errors.badRequest("messages 不能为空");
+  }
+
+  const appSessionId = String(body.appSessionId ?? "").trim();
+  if (!appSessionId) throw errors.badRequest("appSessionId 不能为空");
+
+  const mapped = await getAgentSession(db, user.userId, appSessionId);
+  // 异步模型下只在**提交时**扣一次额度——此前 App 每轮重连都 POST 一次
+  // /agent/chat，会被重复扣周额度（旁支问题在此一并按设计消除）。
+  const quota = await consumeWeeklyQuota(db, user.userId, user.plan, "agent_run");
+  const { base, key } = await agentCreds(c);
+
+  const payload: Record<string, unknown> = { messages: body.messages };
+  if (mapped) {
+    payload.sessionId = mapped.remote_session;
+    payload.chatId = mapped.remote_chat;
+  }
+  const requestedModel = typeof body.modelId === "string" ? body.modelId.trim() : "";
+  if (requestedModel) payload.modelId = requestedModel;
+  if (typeof body.max_tokens === "number" && body.max_tokens > 0) {
+    payload.max_tokens = Math.floor(body.max_tokens);
+  }
+
+  let resp: Response;
+  try {
+    resp = await fetch(`${base}/api/agent/chat`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+        accept: "text/event-stream",
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    throw new ApiError(
+      502,
+      "agent_unreachable",
+      `无法连接 Agent 实例：${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => "");
+    throw new ApiError(
+      resp.status === 401 || resp.status === 403 ? 502 : resp.status === 429 ? 429 : 502,
+      "agent_error",
+      `Agent 实例返回 ${resp.status}：${detail.slice(0, 300)}`,
+    );
+  }
+
+  const remoteSession = resp.headers.get("x-session-id");
+  const remoteChat = resp.headers.get("x-chat-id");
+  if (remoteSession && remoteChat) {
+    await saveAgentSession(db, user.userId, appSessionId, remoteSession, remoteChat);
+  }
+
+  const taskId = resp.headers.get("x-workflow-run-id");
+  if (!taskId) {
+    // 拿不到 runId 就没法轮询，退化成同步流——总比丢任务强。
+    return new Response(convertStream(resp.body as ReadableStream<Uint8Array>), {
+      status: 200,
+      headers: {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache",
+        "x-orion-quota-used": String(quota.used),
+        "x-orion-quota-limit": String(quota.limit),
+      },
+    });
+  }
+
+  // 只取消本条流视图；workflow run 继续在 forge 侧执行。
+  try {
+    await resp.body?.cancel();
+  } catch {
+    /* 取消竞态，忽略 */
+  }
+
+  await upsertTask(db, {
+    taskId,
+    userId: user.userId,
+    chatId: remoteChat ?? "",
+    appSessionId,
+  });
+
+  return c.json({
+    taskId,
+    chatId: remoteChat ?? "",
+    sessionId: remoteSession ?? "",
+    status: "running",
+    used: quota.used,
+    limit: quota.limit,
+  });
+});
+
+/**
+ * GET /agent/tasks/:id/status?from=N
+ * 带游标取增量输出。deltas 与流式路径**完全同构**（content /
+ * reasoning_content），App 可直接复用同一套渲染逻辑。
+ */
+agentRoutes.get("/tasks/:id/status", requireAuth, async (c) => {
+  const user = c.get("user");
+  const db = c.get("db");
+  const taskId = String(c.req.param("id") ?? "").trim();
+  if (!taskId) throw errors.badRequest("缺少任务 id");
+
+  const task = await getTask(db, taskId);
+  if (!task || task.user_id !== user.userId) throw errors.notFound("任务不存在");
+
+  const rawFrom = Number.parseInt(String(c.req.query("from") ?? "0"), 10);
+  const from = Number.isFinite(rawFrom) && rawFrom > 0 ? rawFrom : 0;
+  // follow：允许长轮询一小会儿，减少 App 空转请求；默认 0（即时返回）。
+  const rawFollow = Number.parseInt(String(c.req.query("follow") ?? "0"), 10);
+  const follow = Number.isFinite(rawFollow) && rawFollow > 0 ? Math.min(rawFollow, 8_000) : 0;
+
+  const { base, key } = await agentCreds(c);
+  const url =
+    `${base}/api/agent/streams/${encodeURIComponent(taskId)}` +
+    `?from=${from}&follow=${follow}`;
+
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      headers: { authorization: `Bearer ${key}`, accept: "application/json" },
+    });
+  } catch (e) {
+    throw new ApiError(
+      502,
+      "agent_unreachable",
+      `无法连接 Agent 实例：${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => "");
+    throw new ApiError(
+      resp.status === 401 || resp.status === 403 ? 502 : 502,
+      "agent_error",
+      `Agent 实例返回 ${resp.status}：${detail.slice(0, 300)}`,
+    );
+  }
+
+  const data = (await resp.json()) as {
+    status?: string;
+    from?: number;
+    total?: number;
+    chunks?: unknown[];
+  };
+  const runStatus = data.status ?? "running";
+  const taskStatus = statusOfRun(runStatus);
+  const total = typeof data.total === "number" ? data.total : from;
+
+  // 复用流式路径的同一套映射：UI chunk → OpenAI delta
+  const deltas: Record<string, unknown>[] = [];
+  for (const chunk of data.chunks ?? []) {
+    const delta = chunkToDelta(JSON.stringify(chunk));
+    if (delta) deltas.push(delta);
+  }
+
+  await advanceTask(db, taskId, {
+    cursor: total,
+    status: taskStatus,
+    error: taskStatus === "failed" ? "forge run failed" : null,
+  });
+
+  return c.json({
+    taskId,
+    status: taskStatus,
+    runStatus,
+    from,
+    total,
+    deltas,
+  });
+});
+
+/**
+ * GET /agent/tasks
+ * 当前用户未完成的任务（App 重开后自动续接用）。
+ */
+agentRoutes.get("/tasks", requireAuth, async (c) => {
+  const user = c.get("user");
+  const db = c.get("db");
+  const tasks = await listActiveTasks(db, user.userId);
+  return c.json({
+    tasks: tasks.map((t: AgentTask) => ({
+      taskId: t.task_id,
+      appSessionId: t.app_session_id,
+      chatId: t.chat_id,
+      status: t.status,
+      cursor: t.cursor,
+      updatedAt: t.updated_at,
+    })),
+  });
+});
+
+/**
+ * POST /agent/tasks/:id/stop
+ * 取消任务：先让 forge 显式 cancel（异步模型下客户端早已断流，
+ * 靠「不读它」是停不下来的），再本地标记。
+ */
+agentRoutes.post("/tasks/:id/stop", requireAuth, async (c) => {
+  const user = c.get("user");
+  const db = c.get("db");
+  const taskId = String(c.req.param("id") ?? "").trim();
+  if (!taskId) throw errors.badRequest("缺少任务 id");
+
+  const task = await getTask(db, taskId);
+  if (!task || task.user_id !== user.userId) throw errors.notFound("任务不存在");
+
+  const { base, key } = await agentCreds(c);
+  try {
+    await fetch(`${base}/api/agent/streams/${encodeURIComponent(taskId)}/cancel`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${key}`, accept: "application/json" },
+    });
+  } catch {
+    // 取消是尽力而为：实例不可达时也要把本地标成已停止，
+    // 否则 App 会一直轮询一个实际上已经没人管的任务。
+  }
+
+  await advanceTask(db, taskId, { cursor: task.cursor, status: "stopped" });
+  return c.json({ ok: true, taskId, status: "stopped" });
 });
 
 // ---- POST /agent/session/reset ----

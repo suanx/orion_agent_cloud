@@ -12883,27 +12883,27 @@ function chunk(delta, finishReason) {
     choices: [{ index: 0, delta, finish_reason: finishReason }]
   });
 }
-function convertChunk(raw2) {
+function chunkToDelta(raw2) {
   let event;
   try {
     event = JSON.parse(raw2);
   } catch {
-    return [];
+    return null;
   }
-  if (!event || typeof event.type !== "string") return [];
+  if (!event || typeof event.type !== "string") return null;
   switch (event.type) {
     case "text-delta": {
       const text = event.delta ?? event.text ?? "";
-      if (!text) return [];
-      return [chunk({ content: text }, null)];
+      if (!text) return null;
+      return { content: text };
     }
     case "reasoning-delta": {
       const text = event.delta ?? event.text ?? "";
-      if (!text) return [];
-      return [chunk({ reasoning_content: text }, null)];
+      if (!text) return null;
+      return { reasoning_content: text };
     }
     case "tool-input-available": {
-      return [];
+      return null;
     }
     // 工具审批请求：App 场景下 orion-forge 已被配置为自动放行（见
     // /api/agent/chat 的 agentOptions.toolApproval），理论上不会到这里。
@@ -12911,16 +12911,18 @@ function convertChunk(raw2) {
     // "Agent 在等一个没人点的确认"，好过流静默停住看不出原因。
     case "tool-approval-request": {
       const name = event.toolName || "\u67D0\u4E2A\u64CD\u4F5C";
-      return [
-        chunk({ content: `
+      return {
+        content: `
 
-\u26A0\uFE0F Agent \u8BF7\u6C42\u786E\u8BA4\u300C${name}\u300D\uFF0C\u4F46\u5F53\u524D\u8C03\u7528\u65B9\u65E0\u6CD5\u5E94\u7B54\u5BA1\u6279\uFF0C\u5DF2\u8DF3\u8FC7\u3002` }, null)
-      ];
+\u26A0\uFE0F Agent \u8BF7\u6C42\u786E\u8BA4\u300C${name}\u300D\uFF0C\u4F46\u5F53\u524D\u8C03\u7528\u65B9\u65E0\u6CD5\u5E94\u7B54\u5BA1\u6279\uFF0C\u5DF2\u8DF3\u8FC7\u3002`
+      };
     }
-    // 客户端主动中断：AI SDK 给 abort 而非 finish，不转成 stop ——
-    // 转了会让 App 把「被取消」误认为「正常结束」。
+    // 客户端主动中断 / 正常结束 / 出错：delta 为空，终止语义见
+    // terminalOf()——abort 不能转成 stop，否则 App 会把「被取消」误认
+    // 为「正常结束」。
     case "abort":
-      return [DONE];
+    case "finish":
+      return null;
     case "tool-output-available":
     case "tool-input-start":
     case "tool-input-delta":
@@ -12937,27 +12939,51 @@ function convertChunk(raw2) {
     case "start":
     case "start-step":
     case "finish-step":
-      return [];
+      return null;
     // App 侧不需要这些中间态
     // source-url / source-document（引用来源）：App 无对应展示位，
     // 丢弃即可。若日后要显示引用，需在 App 侧加事件类型。
-    case "finish":
-      return [chunk({}, "stop"), DONE];
     case "error": {
       const msg = event.errorText || "Agent \u6267\u884C\u51FA\u9519";
-      return [chunk({ content: `
+      return { content: `
 
-\u26A0\uFE0F ${msg}` }, "stop"), DONE];
+\u26A0\uFE0F ${msg}` };
     }
     default:
-      return [];
+      return null;
   }
 }
-function convertStream(upstream) {
+function terminalOf(raw2) {
+  let event;
+  try {
+    event = JSON.parse(raw2);
+  } catch {
+    return null;
+  }
+  if (!event || typeof event.type !== "string") return null;
+  if (event.type === "finish") return "stop";
+  if (event.type === "error") return "stop";
+  if (event.type === "abort") return "done";
+  return null;
+}
+function convertChunk(raw2) {
+  const delta = chunkToDelta(raw2);
+  const terminal = terminalOf(raw2);
+  const out = [];
+  if (delta && Object.keys(delta).length > 0) out.push(chunk(delta, null));
+  if (terminal === "stop") {
+    out.push(chunk({}, "stop"), DONE);
+  } else if (terminal === "done") {
+    out.push(DONE);
+  }
+  return out;
+}
+function convertStream(upstream, options = {}) {
   const encoder3 = new TextEncoder();
   const decoder = new TextDecoder();
   let buffer = "";
   let finished = false;
+  let consumedChunks = 0;
   const reader = upstream.getReader();
   let pendingRead = null;
   const KEEPALIVE_MS = 12e3;
@@ -12975,6 +13001,7 @@ function convertStream(upstream) {
         if (!trimmed.startsWith("data:")) continue;
         const payload = trimmed.slice(5).trim();
         if (!payload || payload === "[DONE]") continue;
+        consumedChunks += 1;
         const out = convertChunk(payload);
         for (const piece of out) controller.enqueue(encoder3.encode(piece));
         if (out.some((p) => p.includes("[DONE]"))) sawDone = true;
@@ -12998,16 +13025,32 @@ function convertStream(upstream) {
           void reader.cancel("relay total deadline reached").catch(() => {
           });
           try {
-            controller.enqueue(
-              encoder3.encode(
-                chunk(
-                  {
-                    content: "\n\n\u26A0\uFE0F \u4E91\u7AEF Agent \u54CD\u5E94\u8D85\u65F6\uFF1A105 \u79D2\u5185\u672A\u5B8C\u6210\u672C\u6B21\u4EFB\u52A1\uFF0C\u8FDE\u63A5\u5DF2\u4E3B\u52A8\u5173\u95ED\uFF08\u907F\u514D\u5E73\u53F0\u5F3A\u6740\u5BFC\u81F4\u8BF7\u6C42\u5931\u8D25\uFF09\u3002\u6A21\u578B\u7F51\u5173\u53EF\u80FD\u6392\u961F\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002"
-                  },
-                  "stop"
+            if (options.taskId) {
+              controller.enqueue(
+                encoder3.encode(
+                  chunk(
+                    {
+                      task_fallback: {
+                        taskId: options.taskId,
+                        from: consumedChunks
+                      }
+                    },
+                    "task_fallback"
+                  )
                 )
-              )
-            );
+              );
+            } else {
+              controller.enqueue(
+                encoder3.encode(
+                  chunk(
+                    {
+                      content: "\n\n\u26A0\uFE0F \u4E91\u7AEF Agent \u54CD\u5E94\u8D85\u65F6\uFF1A105 \u79D2\u5185\u672A\u5B8C\u6210\u672C\u6B21\u4EFB\u52A1\uFF0C\u8FDE\u63A5\u5DF2\u4E3B\u52A8\u5173\u95ED\uFF08\u907F\u514D\u5E73\u53F0\u5F3A\u6740\u5BFC\u81F4\u8BF7\u6C42\u5931\u8D25\uFF09\u3002\u6A21\u578B\u7F51\u5173\u53EF\u80FD\u6392\u961F\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002"
+                    },
+                    "stop"
+                  )
+                )
+              );
+            }
           } catch {
             return;
           }
@@ -13081,7 +13124,75 @@ function convertStream(upstream) {
   });
 }
 
+// src/services/agent_tasks.ts
+function mapRunStatus(runStatus) {
+  switch (runStatus) {
+    case "completed":
+      return "done";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "stopped";
+    default:
+      return "running";
+  }
+}
+async function upsertTask(db, task) {
+  const now = nowMs();
+  await db.execute({
+    sql: `INSERT INTO agent_tasks
+            (task_id, user_id, chat_id, app_session_id, status, cursor, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'running', 0, ?, ?)
+          ON CONFLICT(task_id) DO UPDATE SET
+            chat_id = excluded.chat_id,
+            app_session_id = excluded.app_session_id,
+            updated_at = excluded.updated_at`,
+    args: [task.taskId, task.userId, task.chatId, task.appSessionId, now, now]
+  });
+}
+async function getTask(db, taskId) {
+  const r = await db.execute({
+    sql: `SELECT task_id, user_id, chat_id, app_session_id, status, cursor, error,
+                 created_at, updated_at, finished_at
+          FROM agent_tasks WHERE task_id = ?`,
+    args: [taskId]
+  });
+  const row = r.rows[0];
+  return row ?? null;
+}
+async function advanceTask(db, taskId, patch) {
+  const now = nowMs();
+  const terminal = patch.status !== "running";
+  await db.execute({
+    sql: `UPDATE agent_tasks
+          SET cursor = ?, status = ?, error = ?, updated_at = ?,
+              finished_at = CASE WHEN ? THEN ? ELSE finished_at END
+          WHERE task_id = ?`,
+    args: [
+      patch.cursor,
+      patch.status,
+      patch.error ?? null,
+      now,
+      terminal ? 1 : 0,
+      now,
+      taskId
+    ]
+  });
+}
+async function listActiveTasks(db, userId, limit = 20) {
+  const r = await db.execute({
+    sql: `SELECT task_id, user_id, chat_id, app_session_id, status, cursor, error,
+                 created_at, updated_at, finished_at
+          FROM agent_tasks
+          WHERE user_id = ? AND status = 'running'
+          ORDER BY updated_at DESC LIMIT ?`,
+    args: [userId, limit]
+  });
+  return r.rows;
+}
+
 // src/routes/agent.ts
+var statusOfRun = mapRunStatus;
 var agentRoutes = new Hono3();
 function apiBase2(c) {
   const origin = c.req.header("origin") ?? c.req.header("referer");
@@ -13166,7 +13277,16 @@ agentRoutes.post("/chat", requireAuth, async (c) => {
   if (!resp.body) {
     throw errors.internal("Agent \u5B9E\u4F8B\u672A\u8FD4\u56DE\u6D41");
   }
-  return new Response(convertStream(resp.body), {
+  const runId = resp.headers.get("x-workflow-run-id");
+  if (runId && appSessionId) {
+    await upsertTask(db, {
+      taskId: runId,
+      userId: user.userId,
+      chatId: remoteChat ?? "",
+      appSessionId
+    });
+  }
+  return new Response(convertStream(resp.body, { taskId: runId ?? void 0 }), {
     status: 200,
     headers: {
       "content-type": "text/event-stream; charset=utf-8",
@@ -13174,9 +13294,195 @@ agentRoutes.post("/chat", requireAuth, async (c) => {
       "x-orion-agent-model": "agent",
       // App 端靠这两个头把本次消耗同步进额度卡片
       "x-orion-quota-used": String(quota.used),
-      "x-orion-quota-limit": String(quota.limit)
+      "x-orion-quota-limit": String(quota.limit),
+      // 任务 id：App 拿它在流被截断/退后台后继续轮询
+      ...runId ? { "x-orion-task-id": runId } : {}
     }
   });
+});
+async function agentCreds(c) {
+  const user = c.get("user");
+  const instance = await requireInstance(c.get("db"), user.userId);
+  const apiKey = await decryptSecret(c.env.JWT_SECRET, instance.api_key_enc);
+  return { base: instance.base_url.replace(/\/+$/, ""), key: apiKey };
+}
+agentRoutes.post("/tasks", requireAuth, async (c) => {
+  const user = c.get("user");
+  const db = c.get("db");
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    throw errors.badRequest("\u8BF7\u6C42\u4F53\u4E0D\u662F\u5408\u6CD5 JSON");
+  }
+  if (!Array.isArray(body.messages) || body.messages.length === 0) {
+    throw errors.badRequest("messages \u4E0D\u80FD\u4E3A\u7A7A");
+  }
+  const appSessionId = String(body.appSessionId ?? "").trim();
+  if (!appSessionId) throw errors.badRequest("appSessionId \u4E0D\u80FD\u4E3A\u7A7A");
+  const mapped = await getAgentSession(db, user.userId, appSessionId);
+  const quota = await consumeWeeklyQuota(db, user.userId, user.plan, "agent_run");
+  const { base, key } = await agentCreds(c);
+  const payload = { messages: body.messages };
+  if (mapped) {
+    payload.sessionId = mapped.remote_session;
+    payload.chatId = mapped.remote_chat;
+  }
+  const requestedModel = typeof body.modelId === "string" ? body.modelId.trim() : "";
+  if (requestedModel) payload.modelId = requestedModel;
+  if (typeof body.max_tokens === "number" && body.max_tokens > 0) {
+    payload.max_tokens = Math.floor(body.max_tokens);
+  }
+  let resp;
+  try {
+    resp = await fetch(`${base}/api/agent/chat`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+        accept: "text/event-stream"
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch (e) {
+    throw new ApiError(
+      502,
+      "agent_unreachable",
+      `\u65E0\u6CD5\u8FDE\u63A5 Agent \u5B9E\u4F8B\uFF1A${e instanceof Error ? e.message : String(e)}`
+    );
+  }
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => "");
+    throw new ApiError(
+      resp.status === 401 || resp.status === 403 ? 502 : resp.status === 429 ? 429 : 502,
+      "agent_error",
+      `Agent \u5B9E\u4F8B\u8FD4\u56DE ${resp.status}\uFF1A${detail.slice(0, 300)}`
+    );
+  }
+  const remoteSession = resp.headers.get("x-session-id");
+  const remoteChat = resp.headers.get("x-chat-id");
+  if (remoteSession && remoteChat) {
+    await saveAgentSession(db, user.userId, appSessionId, remoteSession, remoteChat);
+  }
+  const taskId = resp.headers.get("x-workflow-run-id");
+  if (!taskId) {
+    return new Response(convertStream(resp.body), {
+      status: 200,
+      headers: {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache",
+        "x-orion-quota-used": String(quota.used),
+        "x-orion-quota-limit": String(quota.limit)
+      }
+    });
+  }
+  try {
+    await resp.body?.cancel();
+  } catch {
+  }
+  await upsertTask(db, {
+    taskId,
+    userId: user.userId,
+    chatId: remoteChat ?? "",
+    appSessionId
+  });
+  return c.json({
+    taskId,
+    chatId: remoteChat ?? "",
+    sessionId: remoteSession ?? "",
+    status: "running",
+    used: quota.used,
+    limit: quota.limit
+  });
+});
+agentRoutes.get("/tasks/:id/status", requireAuth, async (c) => {
+  const user = c.get("user");
+  const db = c.get("db");
+  const taskId = String(c.req.param("id") ?? "").trim();
+  if (!taskId) throw errors.badRequest("\u7F3A\u5C11\u4EFB\u52A1 id");
+  const task = await getTask(db, taskId);
+  if (!task || task.user_id !== user.userId) throw errors.notFound("\u4EFB\u52A1\u4E0D\u5B58\u5728");
+  const rawFrom = Number.parseInt(String(c.req.query("from") ?? "0"), 10);
+  const from = Number.isFinite(rawFrom) && rawFrom > 0 ? rawFrom : 0;
+  const rawFollow = Number.parseInt(String(c.req.query("follow") ?? "0"), 10);
+  const follow = Number.isFinite(rawFollow) && rawFollow > 0 ? Math.min(rawFollow, 8e3) : 0;
+  const { base, key } = await agentCreds(c);
+  const url = `${base}/api/agent/streams/${encodeURIComponent(taskId)}?from=${from}&follow=${follow}`;
+  let resp;
+  try {
+    resp = await fetch(url, {
+      headers: { authorization: `Bearer ${key}`, accept: "application/json" }
+    });
+  } catch (e) {
+    throw new ApiError(
+      502,
+      "agent_unreachable",
+      `\u65E0\u6CD5\u8FDE\u63A5 Agent \u5B9E\u4F8B\uFF1A${e instanceof Error ? e.message : String(e)}`
+    );
+  }
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => "");
+    throw new ApiError(
+      resp.status === 401 || resp.status === 403 ? 502 : 502,
+      "agent_error",
+      `Agent \u5B9E\u4F8B\u8FD4\u56DE ${resp.status}\uFF1A${detail.slice(0, 300)}`
+    );
+  }
+  const data = await resp.json();
+  const runStatus = data.status ?? "running";
+  const taskStatus = statusOfRun(runStatus);
+  const total = typeof data.total === "number" ? data.total : from;
+  const deltas = [];
+  for (const chunk2 of data.chunks ?? []) {
+    const delta = chunkToDelta(JSON.stringify(chunk2));
+    if (delta) deltas.push(delta);
+  }
+  await advanceTask(db, taskId, {
+    cursor: total,
+    status: taskStatus,
+    error: taskStatus === "failed" ? "forge run failed" : null
+  });
+  return c.json({
+    taskId,
+    status: taskStatus,
+    runStatus,
+    from,
+    total,
+    deltas
+  });
+});
+agentRoutes.get("/tasks", requireAuth, async (c) => {
+  const user = c.get("user");
+  const db = c.get("db");
+  const tasks = await listActiveTasks(db, user.userId);
+  return c.json({
+    tasks: tasks.map((t) => ({
+      taskId: t.task_id,
+      appSessionId: t.app_session_id,
+      chatId: t.chat_id,
+      status: t.status,
+      cursor: t.cursor,
+      updatedAt: t.updated_at
+    }))
+  });
+});
+agentRoutes.post("/tasks/:id/stop", requireAuth, async (c) => {
+  const user = c.get("user");
+  const db = c.get("db");
+  const taskId = String(c.req.param("id") ?? "").trim();
+  if (!taskId) throw errors.badRequest("\u7F3A\u5C11\u4EFB\u52A1 id");
+  const task = await getTask(db, taskId);
+  if (!task || task.user_id !== user.userId) throw errors.notFound("\u4EFB\u52A1\u4E0D\u5B58\u5728");
+  const { base, key } = await agentCreds(c);
+  try {
+    await fetch(`${base}/api/agent/streams/${encodeURIComponent(taskId)}/cancel`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${key}`, accept: "application/json" }
+    });
+  } catch {
+  }
+  await advanceTask(db, taskId, { cursor: task.cursor, status: "stopped" });
+  return c.json({ ok: true, taskId, status: "stopped" });
 });
 agentRoutes.post("/session/reset", requireAuth, async (c) => {
   const user = c.get("user");
