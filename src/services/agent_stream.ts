@@ -159,8 +159,8 @@ export function convertStream(
   let finished = false;
 
   const reader = upstream.getReader();
-  // 进行中的上游读取：pull 可能因 keepalive 空转多次，read() 的 Promise
-  // 必须缓存复用，否则会对同一 reader 并发排多条 read。
+  // 进行中的上游读取：keepalive 空转期间 read() 的 Promise 必须缓存复用，
+  // 否则会对同一 reader 并发排多条 read。
   let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
 
   /** keepalive 间隔：边缘节点（EdgeOne/CDN）对无数据响应流通常 30~60s
@@ -206,24 +206,45 @@ export function convertStream(
     return sawDone;
   };
 
-  // ⚠️ 用 pull 而非 async start：ReadableStream 的 start 若返回 Promise，
-  // 会等到它 resolve 才开始拉取数据；而 start 内部又 await reader.read()
-  // 就形成死锁（下游永远等不到数据，测试表现为超时）。
-  // pull 每次只读一块，交替推进，是流转换的标准写法。
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (finished) return;
+  // ⚠️ 2026-10-10 根因修复：读上游的逻辑绝不能放在 pull() 里。
+  //
+  // 实测证据（逐字节读中继 chat 响应 115.6s，一个字节都没收到，连中继
+  // 自己每 12s 的 keepalive 注释帧都没有）：EdgeOne Cloud Functions 平台
+  // 不驱动本流的 pull()（或把响应体整体缓冲到函数结束才吐出）。pull 版
+  // 下 reader.read() 永远不被调用 → 上游 forge 的数据永远不被消费 →
+  // forge 侧数据积压 → 120s 平台强杀 → 客户端收到不可解析的 504 HTML
+  // 页 → App 一直转圈。同一现象同时解释了「keepalive 发不出去」。
+  //
+  // 改为 start() 内 fire-and-forget 主动泵：与下游消费节奏解耦，函数一
+  // 进入就开始读上游并 enqueue 进流的内部队列。
+  //   · 若平台只是「不驱动 pull」→ 客户端立刻恢复实时流式输出；
+  //   · 若平台整体缓冲到函数结束 → 至少上游能被消费、run 正常跑完、
+  //     完整内容随响应一次性到达（不再 504）。
+  // 两种情况都比 pull 版严格更优。
+  //
+  // 注意：start() 本身必须同步返回（泵用 void 起跑，不得 await），否则
+  // 会推迟流的构造 resolve；也不要指望 pull 被平台回调。
+  const pump = async (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+  ): Promise<void> => {
+    /** 关流：补 [DONE] 并 close；对已取消的流 enqueue 会抛，一律吞掉。 */
+    const finishStream = (): void => {
+      finished = true;
       try {
-        // 带 keepalive 的读取：12s 无上游数据就先发一帧注释保活，
-        // 继续等待，直到真正读到数据或流结束。
-        if (!pendingRead) pendingRead = reader.read();
-        let result: ReadableStreamReadResult<Uint8Array>;
-        for (;;) {
-          // 总时长兜底：到 105s 仍未读完，主动发错误提示并关流，
-          // 抢在 EdgeOne 120s 平台强杀之前（见 TOTAL_DEADLINE_MS 注释）。
-          if (Date.now() - startedAt > TOTAL_DEADLINE_MS) {
-            finished = true;
-            void reader.cancel("relay total deadline reached").catch(() => {});
+        controller.enqueue(encoder.encode(DONE));
+        controller.close();
+      } catch {
+        /* 流已被下游取消 */
+      }
+    };
+    try {
+      for (;;) {
+        if (finished) return;
+        // 总时长兜底：到 105s 仍未读完，主动发错误提示并关流，
+        // 抢在 EdgeOne 120s 平台强杀之前（见 TOTAL_DEADLINE_MS 注释）。
+        if (Date.now() - startedAt > TOTAL_DEADLINE_MS) {
+          void reader.cancel("relay total deadline reached").catch(() => {});
+          try {
             controller.enqueue(
               encoder.encode(
                 chunk(
@@ -237,25 +258,31 @@ export function convertStream(
                 ),
               ),
             );
-            controller.enqueue(encoder.encode(DONE));
-            controller.close();
+          } catch {
             return;
           }
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          const idle = new Promise<"idle">((resolve) => {
-            timer = setTimeout(() => resolve("idle"), KEEPALIVE_MS);
-          });
-          const raced = await Promise.race([pendingRead, idle]);
-          clearTimeout(timer);
-          if (raced === "idle") {
-            controller.enqueue(KEEPALIVE_FRAME);
-            continue;
-          }
-          result = raced;
-          pendingRead = null;
-          break;
+          finishStream();
+          return;
         }
-        const { done, value } = result;
+        if (!pendingRead) pendingRead = reader.read();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const idle = new Promise<"idle">((resolve) => {
+          timer = setTimeout(() => resolve("idle"), KEEPALIVE_MS);
+        });
+        const raced = await Promise.race([pendingRead, idle]);
+        clearTimeout(timer);
+        // 等待期间下游 cancel 了：立刻收手，enqueue 会抛
+        if (finished) return;
+        if (raced === "idle") {
+          try {
+            controller.enqueue(KEEPALIVE_FRAME);
+          } catch {
+            return;
+          }
+          continue;
+        }
+        pendingRead = null;
+        const { done, value } = raced;
         if (done) {
           // 收尾：处理没有空行结尾的残留，再补 [DONE]
           const tail = buffer.trim();
@@ -267,26 +294,36 @@ export function convertStream(
               }
             }
           }
-          finished = true;
-          controller.enqueue(encoder.encode(DONE));
-          controller.close();
+          finishStream();
           return;
         }
         buffer += decoder.decode(value, { stream: true });
         if (drainBuffer(controller)) {
-          finished = true;
-          controller.enqueue(encoder.encode(DONE));
-          controller.close();
+          // 上游已发 [DONE]：回收上游读取，避免连接挂着
+          void reader.cancel("upstream done").catch(() => {});
+          finishStream();
+          return;
         }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        finished = true;
+      }
+    } catch (e) {
+      if (finished) return;
+      const msg = e instanceof Error ? e.message : String(e);
+      finished = true;
+      try {
         controller.enqueue(
           encoder.encode(chunk({ content: `\n\n⚠️ Agent 连接中断：${msg}` }, "stop")),
         );
         controller.enqueue(encoder.encode(DONE));
         controller.close();
+      } catch {
+        /* 流已被下游取消 */
       }
+    }
+  };
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      void pump(controller);
     },
     cancel(reason) {
       finished = true;
