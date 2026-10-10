@@ -17,7 +17,7 @@ import { agentRoutes } from "./routes/agent";
 import { adminHtml } from "./ui/admin_html";
 import { requireAuth } from "./middleware/auth";
 
-// 全部路由挂在 /api 前缀下：EdgeOne 函数文件是 cloud-functions/api/[[route]].ts，
+// 全部路由挂在 /api 前缀下：EdgeOne 函数文件是 functions/api/[[route]].ts，
 // 只有 /api/* 会进入函数且带着前缀原样到达这里——此前路由挂在根路径，
 // /api/auth/* 等全部 404（云端功能在线上从未真正通过，被 App 的静默降级掩盖，
 // 2026-10-08 本地部署实测复现后修复）。

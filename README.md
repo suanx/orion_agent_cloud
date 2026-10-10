@@ -35,7 +35,7 @@
 
 ```mermaid
 flowchart LR
-    APP["📱 orion_agent\n(Flutter App)"] -- "JWT / dt_ 设备令牌" --> API["⚡ EdgeOne Cloud Function\ncloud-functions/api/[[route]].ts"]
+    APP["📱 orion_agent\n(Flutter App)"] -- "JWT / dt_ 设备令牌" --> API["⚡ EdgeOne 边缘函数\nfunctions/api/[[route]].ts"]
     subgraph svc["Hono 路由层"]
         AUTH["auth"]
         RELAY["relay"]
@@ -123,16 +123,8 @@ npm run db:migrate
    - 安装命令：`npm install`
    - 构建命令：`npm run typecheck`
    - 输出目录：`dist`（纯函数项目，留空亦可）
-   - `cloud-functions/` 目录会被识别为 **Cloud Functions（Node.js runtime）**，
-     所有 `/api/*` 请求由 `cloud-functions/api/[[route]].ts` 接管。
-     `edgeone.json` 里的 `cloudFunctions.nodejs.maxDuration` **只对这个目录生效**——
-     旧版的 `functions/` 目录跑 Edge Runtime（V8，CPU 200ms、不支持 maxDuration），
-     长流式转发会被腰斩，详见下方「运行时选型」。
-
-   **运行时选型（2026-10-10 修正）**：本项目必须用 `cloud-functions/`（Node.js v20）。
-   云端 Agent 中继是长挂的流式 SSE 转发（单次任务挂几分钟），Edge Runtime 的
-   CPU 200ms 配额与无 `maxDuration` 支持扛不住；历史上误放在 `functions/` 目录，
-   导致 `maxDuration: 120` 配置从未生效、App 侧表现为「网络波动，重连 4 次全失败」。
+   - `functions/` 目录会被自动识别为**边缘函数**（Cloudflare Pages Functions 兼容约定），
+     所有 `/api/*` 请求由 `functions/api/[[route]].ts` 接管
 3. **配置环境变量**（完整清单见 `.env.example`）：
 
    | 变量 | 必填 | 说明 |
