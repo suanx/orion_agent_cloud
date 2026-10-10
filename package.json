@@ -5,6 +5,7 @@
   "type": "module",
   "description": "orion_agent 云端后端：EdgeOne Pages 边缘函数 + Turso (libSQL)",
   "scripts": {
+    "build": "node scripts/build-edgeone.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

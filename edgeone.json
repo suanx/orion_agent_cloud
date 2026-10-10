@@ -1,8 +1,8 @@
 {
   "$schema": "https://edgeone.ai/document/schema.json",
   "name": "orion-backend",
-  "buildCommand": "npm run typecheck",
-  "outputDirectory": "public",
+  "buildCommand": "npm run build",
+  "outputDirectory": ".edgeone",
   "installCommand": "npm install",
   "framework": "none",
   "cloudFunctions": {
