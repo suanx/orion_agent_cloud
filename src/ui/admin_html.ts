@@ -1275,16 +1275,33 @@ function closeDevices() {
   _devUserId = '';
 }
 
-/** 解绑单台设备（吊销其全部会话，与 App 端自助解绑同语义）。 */
-function unbindDevice(userId, deviceId) {
-  if (!window.confirm('确认解绑该设备？其全部登录会话将被吊销。')) return;
-  api('/users/' + encodeURIComponent(userId) + '/devices/' + encodeURIComponent(deviceId), {method:'DELETE', timeout:30000})
-    .then(function() {
-      toast('设备已解绑');
-      showDevices(userId);
-      loadUsers();
-    })
-    .catch(function(e) { toast('解绑失败: ' + e.message); });
+/** 解绑单台设备（吊销其全部会话，与 App 端自助解绑同语义）。
+ *
+ * 2026-10-11 修复：不用 window.confirm——浏览器勾选「阻止此页面创建
+ * 其他对话框」后所有 confirm 静默返回 false，点击完全无作用。改为
+ * 两段式按钮确认：第一击变「确认解绑？」，再击执行，3 秒未击还原。
+ */
+function unbindDevice(userId, deviceId, btn) {
+  if (btn.getAttribute('data-armed') === '1') {
+    btn.removeAttribute('data-armed');
+    btn.textContent = '解绑';
+    api('/users/' + encodeURIComponent(userId) + '/devices/' + encodeURIComponent(deviceId), {method:'DELETE', timeout:30000})
+      .then(function() {
+        toast('设备已解绑');
+        showDevices(userId);
+        loadUsers();
+      })
+      .catch(function(e) { toast('解绑失败: ' + e.message); });
+    return;
+  }
+  btn.setAttribute('data-armed', '1');
+  btn.textContent = '确认解绑？';
+  setTimeout(function() {
+    if (btn.getAttribute('data-armed') === '1') {
+      btn.removeAttribute('data-armed');
+      btn.textContent = '解绑';
+    }
+  }, 3000);
 }
 
 // 事件委托：用户表按钮（data-act）统一在这里分发（2026-10-11 P0 修复）。
@@ -1308,7 +1325,7 @@ document.addEventListener('click', function(e) {
   // 设备弹窗里的解绑按钮（data-dev）
   var ub = e.target && e.target.closest ? e.target.closest('[data-dev]') : null;
   if (ub && _devUserId) {
-    unbindDevice(_devUserId, ub.getAttribute('data-dev'));
+    unbindDevice(_devUserId, ub.getAttribute('data-dev'), ub);
   }
 });
 
