@@ -72,11 +72,25 @@ export async function encryptApiKey(secret: string, plain: string): Promise<stri
 }
 
 export async function decryptApiKey(secret: string, enc: string): Promise<string> {
+  // 2026-10-11：解密失败改用 503（全局 handler 只吞 5xx 文案，500 会被
+  // 泛化成「服务器内部错误」，管理员/App 无法知道该做什么）。503 带
+  // 明确的修复指引直通调用方。
+  const badKey = (detail: string) =>
+    new ApiError(
+      503,
+      "provider_key_invalid",
+      `供应商 API Key 无法解密（${detail}）——请在管理台编辑该供应商，重新填写 API Key 并保存`,
+    );
   if (!enc.startsWith(encPrefix)) {
-    throw errors.internal("供应商密钥格式不正确(缺少 v1: 前缀)");
+    throw badKey("密文缺少 v1: 前缀");
   }
-  const joined = hexToBytes(enc.slice(encPrefix.length));
-  if (joined.length < 13) throw errors.internal("供应商密钥密文长度异常");
+  let joined: Uint8Array;
+  try {
+    joined = hexToBytes(enc.slice(encPrefix.length));
+  } catch {
+    throw badKey("密文不是合法 hex");
+  }
+  if (joined.length < 13) throw badKey("密文长度异常");
   const iv = joined.slice(0, 12);
   const ct = joined.slice(12);
   const key = await deriveKey(secret);
@@ -85,7 +99,7 @@ export async function decryptApiKey(secret: string, enc: string): Promise<string
     return new TextDecoder().decode(pt);
   } catch {
     // 换过 JWT_SECRET 会走到这里
-    throw errors.internal("供应商密钥解密失败：JWT_SECRET 可能已变更，需重新录入 Key");
+    throw badKey("JWT_SECRET 可能已变更");
   }
 }
 
