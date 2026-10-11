@@ -24,33 +24,17 @@ import {
   resolveProviderForChat,
   toPublicProvider,
 } from "../services/ai_providers";
+import { publicApiBase } from "../utils/public-base";
 
 export const aiRoutes = new Hono<Env>();
 
 /**
- * 站点自身地址: 优先用请求头(Origin/Referer), 回落到请求自身 origin,
- * 最后才是 PUBLIC_BASE_URL。
- * App 端拿这个拼云端模型的 chatUrl。
- *
- * ⚠️ 必须有一级「请求自身 origin」：原生 HTTP 客户端（Flutter/Dio）不发
- * Origin/Referer，环境变量漏配时曾回落成 ""，chatUrl 变成相对路径，
- * App 端直接抛无状态码异常（「请求失败（HTTP null）」）。
+ * 站点自身地址: 2026-10-11 起统一走 publicApiBase（public-base.ts）——
+ * 旧实现的回落链曾把 EdgeOne 内部 SCF 域名（c.req.url）当公网地址
+ * 返回，App 拿它拼 chatUrl 公网不可达 → 「云端模型一直重新连接」。
  */
 function apiBase(c: Context<Env>): string {
-  const origin = c.req.header("origin") ?? c.req.header("referer");
-  if (origin) {
-    try {
-      return new URL(origin).origin;
-    } catch {
-      // 非法 Origin 头, 继续回落
-    }
-  }
-  try {
-    return new URL(c.req.url).origin;
-  } catch {
-    // c.req.url 异常（极端适配器场景），继续回落到环境变量
-  }
-  return c.env.PUBLIC_BASE_URL || "";
+  return publicApiBase(c);
 }
 
 // ---- GET /ai/providers ----
@@ -104,12 +88,25 @@ aiRoutes.post("/chat", requireAuth, async (c) => {
 
   const providerId = typeof body.providerId === "string" ? body.providerId : undefined;
   const requestedModel = typeof body.model === "string" ? body.model : "";
-  const resolved = await resolveProviderForChat(
-    db,
-    c.env.JWT_SECRET,
-    providerId,
-    requestedModel
-  );
+  // 供应商解析（2026-10-11）：解密失败/内部地址等错误统一收敛为
+  // 可操作的提示（503/502），不再裸 500「服务器内部错误」——那正是
+  // 「云端模型一直重新连接」时 App 端唯一的线索。
+  let resolved: Awaited<ReturnType<typeof resolveProviderForChat>>;
+  try {
+    resolved = await resolveProviderForChat(
+      db,
+      c.env.JWT_SECRET,
+      providerId,
+      requestedModel
+    );
+  } catch (e) {
+    if (e instanceof ApiError) throw e;
+    throw new ApiError(
+      502,
+      "provider_error",
+      `供应商配置异常（密钥解密失败或配置损坏，请管理员在管理台重新保存供应商）: ${e instanceof Error ? e.message : String(e)}`
+    );
+  }
 
   // 透传上游字段, 但 model 由后端裁决(防止 App 传任意模型名打穿配置)
   const upstream: Record<string, unknown> = { ...body, model: resolved.model };

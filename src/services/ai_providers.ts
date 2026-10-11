@@ -13,7 +13,7 @@
 
 import type { Client } from "@libsql/client";
 import { hex, nowMs, uuid } from "../utils/crypto";
-import { errors } from "../utils/errors";
+import { errors, ApiError } from "../utils/errors";
 
 /** 与 App 端 lib/models/llm_config.dart 的 ProviderModel 对齐。 */
 export type ProviderModelSpec = {
@@ -276,10 +276,22 @@ export async function resolveProviderForChat(
   if (!chosen) {
     throw errors.badRequest(`供应商「${row.name}」未配置可用模型`);
   }
+  const baseUrl = normalizeBaseUrl(row.base_url);
+  // 平台内部地址守卫（2026-10-11 修复 P1）：管理台曾在 EdgeOne 内部
+  // SCF 域名下操作，apiBase 旧回落链把内部域名存进了 base_url——
+  // 上游转发永远失败。这里显式拦截并给出可执行的修复指引（503，
+  // 服务端可预期的运维态而非 500）。
+  if (/(\.qcloudteo\.com|pages-scf-|\.internal$)/i.test(baseUrl)) {
+    throw new ApiError(
+      503,
+      "provider_misconfigured",
+      `供应商「${row.name}」的 base_url 配置了平台内部地址（${baseUrl}），请在管理台改为上游模型的公网地址后重试`,
+    );
+  }
   return {
     row,
     apiKey: await decryptApiKey(secret, row.api_key_enc),
-    baseUrl: normalizeBaseUrl(row.base_url),
+    baseUrl,
     model: chosen.name,
   };
 }

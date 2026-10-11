@@ -13,6 +13,7 @@ import {
   toPublicAgentInfo,
   getInstance,
 } from "../services/agent_instances";
+import { publicApiBase } from "../utils/public-base";
 import { chunkToDelta, convertStream } from "../services/agent_stream";
 import { consumeWeeklyQuota } from "../services/quota";
 import {
@@ -33,26 +34,9 @@ const statusOfRun = mapRunStatus;
 export const agentRoutes = new Hono<Env>();
 
 function apiBase(c: Context<Env>): string {
-  const origin = c.req.header("origin") ?? c.req.header("referer");
-  if (origin) {
-    try {
-      return new URL(origin).origin;
-    } catch {
-      // 非法 Origin，回落到下一级
-    }
-  }
-  // 请求自身的 origin：App 的请求本来就打到本服务（如
-  // https://orion.suen.us.ci/api/agent/info），c.req.url 一定带完整地址。
-  // 这一级必须放在 PUBLIC_BASE_URL 之前——原生 HTTP 客户端（Flutter/Dio）
-  // 不发 Origin/Referer 头，环境变量一旦漏配，这里曾回落成 ""，
-  // chatUrl 变成相对路径 "/api/agent/chat"，App 端 Dio 对相对 URL 直接抛
-  // 无状态码异常，表现为「请求失败（HTTP null）」（2026-10-10 实测）。
-  try {
-    return new URL(c.req.url).origin;
-  } catch {
-    // c.req.url 异常（极端适配器场景），继续回落
-  }
-  return c.env.PUBLIC_BASE_URL || "";
+  // 2026-10-11 起统一走 publicApiBase：c.req.url 在 EdgeOne 上是内部
+  // SCF 域名，直接返回会让 /agent/info 的 chatUrl 公网不可达。
+  return publicApiBase(c);
 }
 
 // ---- GET /agent/info ----
@@ -71,7 +55,30 @@ agentRoutes.get("/info", requireAuth, async (c) => {
 agentRoutes.post("/chat", requireAuth, async (c) => {
   const user = c.get("user");
   const db = c.get("db");
-  const instance = await requireInstance(db, user.userId);
+
+  // 未授权处理（2026-10-11 新功能）：登录了账号但管理员未在后台绑定
+  // 云端 Agent 实例（或实例被停用）的用户，仍允许进入云端 Agent 界面
+  // 发消息——返回一条合成的 SSE 回复「暂未授权 请联系管理员」，App 端
+  // 按普通助手消息展示。不扣周额度（没有消耗任何算力）。
+  const instanceRow = await getInstance(db, user.userId);
+  if (!instanceRow || instanceRow.enabled !== 1) {
+    const text =
+      instanceRow
+        ? "暂未授权 请联系管理员（你的云端 Agent 已被停用）"
+        : "暂未授权 请联系管理员";
+    const sse =
+      `data: ${JSON.stringify({
+        choices: [{ delta: { content: text }, index: 0 }],
+      })}\n\ndata: [DONE]\n\n`;
+    return new Response(sse, {
+      status: 200,
+      headers: {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache",
+      },
+    });
+  }
+  const instance = instanceRow;
 
   let body: {
     model?: string;
