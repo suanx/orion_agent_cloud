@@ -97,7 +97,8 @@ export async function requireAuth(c: Context<Env>, next: Next) {
     user = {
       userId: result.payload.sub,
       plan: effectivePlan(String(row.plan), (row.plan_expires_at as number | null) ?? null),
-      deviceId: result.payload.did ?? "",
+      // did 无长度限制会直接进 DB/日志（2026-10-11）：截断兜底。
+      deviceId: String(result.payload.did ?? "").slice(0, 128),
       kind: "jwt",
       planExpiresAt: (row.plan_expires_at as number | null) ?? null,
     };
@@ -111,8 +112,25 @@ export async function requireAuth(c: Context<Env>, next: Next) {
 /** 管理员鉴权: 独立令牌, 不走用户体系。 */
 export async function requireAdmin(c: Context<Env>, next: Next) {
   const token = bearer(c);
-  if (!token || token !== c.env.ADMIN_TOKEN) {
+  if (!token) throw errors.unauthorized("管理员令牌无效");
+  // 恒定时间比较（2026-10-11 修复 P1）：旧实现 `!==` 逐字符短路比较，
+  // 存在时序侧信道。与 password.ts 的 PBKDF2 比较口径对齐。
+  const expected = c.env.ADMIN_TOKEN ?? "";
+  if (
+    expected.length === 0 ||
+    token.length !== expected.length ||
+    !timingSafeEqualStr(token, expected)
+  ) {
     throw errors.unauthorized("管理员令牌无效");
   }
   await next();
+}
+
+/** 长度相等前提下的恒定时间字符串比较（Web Crypto 无同步 API，退化实现）。 */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
 }

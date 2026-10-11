@@ -110,8 +110,13 @@ async function toolCall(
         const tname = String(args.name ?? "").trim().slice(0, 100);
         const prompt = String(args.prompt ?? "").trim().slice(0, 8000);
         if (!tname || !prompt) return text("错误: name/prompt 不能为空");
-        const hour = Math.min(Math.max(Number(args.schedule_hour ?? 8), 0), 23);
-        const minute = Math.min(Math.max(Number(args.schedule_minute ?? 0), 0), 59);
+        // NaN 守卫（2026-10-11）：非法值回落默认，防 INSERT NaN / Invalid Date。
+        const numOr = (v: unknown, d: number) => {
+          const n = Number(v);
+          return Number.isFinite(n) ? n : d;
+        };
+        const hour = Math.min(Math.max(numOr(args.schedule_hour ?? 8, 8), 0), 23);
+        const minute = Math.min(Math.max(numOr(args.schedule_minute ?? 0, 0), 0), 59);
         const count = await db.execute({
           sql: "SELECT COUNT(*) AS n FROM cloud_tasks WHERE user_id = ?",
           args: [user.userId],

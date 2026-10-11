@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { Client } from "@libsql/client";
+import type { Client, InValue } from "@libsql/client";
 import type { Env, Bindings } from "../env";
 import { requireAuth } from "../middleware/auth";
 import { errors } from "../utils/errors";
@@ -56,9 +56,25 @@ syncRoutes.post("/push", requireAuth, async (c) => {
   }
 
   const limit = rowLimit({ plan: user.plan, env: c.env });
-  let accepted = 0;
-  let skipped = 0;
 
+  // 先校验全部行、再统一写入（2026-10-11 修复）：
+  // - 旧实现逐行 execute（200 行 = 200 次跨域往返，最坏 20-30s 逼近
+  //   120s 上限），且中途失败会留下部分写入；行数上限检查还发生在
+  //   写入之后（超限数据已落库不回滚）。
+  // - 现在：先内存校验 → 一次性查出本批涉及行的现状 → 套餐行数
+  //   「先检后写」→ db.batch 单次往返 + 事务写全部行。
+  interface ValidRow {
+    table: string;
+    rowId: string;
+    updatedAt: number;
+    tombstone: number;
+    cipher: string | null;
+    nonce: string;
+  }
+  const valid: ValidRow[] = [];
+  let skipped = 0;
+  const rowKey = (t: string, r: string) => `${t}\u0000${r}`;
+  const seen = new Set<string>();
   for (const raw of rowsIn) {
     const table = checkTableName(String(raw.table ?? ""));
     const rowId = String(raw.rowId ?? "").trim();
@@ -88,28 +104,65 @@ syncRoutes.post("/push", requireAuth, async (c) => {
       skipped++;
       continue;
     }
+    const key = rowKey(table, rowId);
+    if (seen.has(key)) {
+      skipped++; // 同批重复行：保留第一条
+      continue;
+    }
+    seen.add(key);
+    valid.push({ table, rowId, updatedAt, tombstone, cipher, nonce });
+  }
 
-    // 末写胜出: 仅当传入 updated_at >= 现有值才覆盖(旧设备的延迟写入不覆盖新数据)
-    await db.execute({
-      sql: `INSERT INTO sync_state
-              (user_id, table_name, row_id, updated_at, tombstone, device_id, payload_encrypted, nonce)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(user_id, table_name, row_id) DO UPDATE SET
-              updated_at = excluded.updated_at,
-              tombstone  = excluded.tombstone,
-              device_id  = excluded.device_id,
-              payload_encrypted = excluded.payload_encrypted,
-              nonce      = excluded.nonce
-            WHERE excluded.updated_at >= sync_state.updated_at`,
-      args: [user.userId, table, rowId, updatedAt, tombstone, user.deviceId, cipher, nonce],
-    });
-    accepted++;
+  // 套餐行数「先检后写」：查出本批涉及的行里有哪些已存在，
+  // 净新增数 + 当前总数不得超过上限。
+  const limit0 = limit;
+  if (limit0 > 0 && valid.length > 0) {
+    const tables = [...new Set(valid.map((r) => r.table))];
+    const existing = new Set<string>();
+    // 按表分批查询（表名已过白名单，IN 参数安全）
+    for (const t of tables) {
+      const ids = valid.filter((r) => r.table === t).map((r) => r.rowId);
+      for (let i = 0; i < ids.length; i += 100) {
+        const slice = ids.slice(i, i + 100);
+        const r = await db.execute({
+          sql: `SELECT row_id FROM sync_state
+                WHERE user_id = ? AND table_name = ? AND row_id IN (${slice.map(() => "?").join(",")})`,
+          args: [user.userId, t, ...slice],
+        });
+        for (const row of r.rows) existing.add(rowKey(t, String(row.row_id)));
+      }
+    }
+    const netNew = valid.filter((r) => !existing.has(rowKey(r.table, r.rowId))).length;
+    const cur = await syncStats(db, user.userId);
+    if (cur.rows + netNew > limit0) {
+      throw errors.quota(
+        `同步行数将超出套餐上限 (${cur.rows} + ${netNew} 新增 > ${limit0})，请先清理或升级套餐`,
+      );
+    }
+  }
+
+  // batch 单次往返 + 事务：全部成功或全部不落库。
+  const stmts = valid.map((r) => ({
+    sql: `INSERT INTO sync_state
+            (user_id, table_name, row_id, updated_at, tombstone, device_id, payload_encrypted, nonce)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(user_id, table_name, row_id) DO UPDATE SET
+            updated_at = excluded.updated_at,
+            tombstone  = excluded.tombstone,
+            device_id  = excluded.device_id,
+            payload_encrypted = excluded.payload_encrypted,
+            nonce      = excluded.nonce
+          WHERE excluded.updated_at >= sync_state.updated_at`,
+    args: [user.userId, r.table, r.rowId, r.updatedAt, r.tombstone, user.deviceId, r.cipher, r.nonce] as InValue[],
+  }));
+  let accepted = 0;
+  if (stmts.length > 0) {
+    const results = await db.batch(stmts, "write");
+    // 末写胜出 WHERE 未命中（旧写入更新）不计入 accepted。
+    for (const res of results) accepted += res.rowsAffected > 0 ? 1 : 0;
   }
 
   const stats = await syncStats(db, user.userId);
-  if (limit > 0 && stats.rows > limit) {
-    throw errors.quota(`同步行数超出套餐上限 (${stats.rows}/${limit})`);
-  }
   return c.json({ ok: true, accepted, skipped, serverTime: Date.now(), stats });
 });
 
@@ -190,21 +243,39 @@ syncRoutes.get("/stats", requireAuth, async (c) => {
 });
 
 // ---- DELETE /sync/rows?table=&rowId= ----
+// 2026-10-11 修复（P1）：此前直接物理删除、不写 tombstone——与 push 的
+// tombstone 设计（schema 注释「删除写 tombstone」）自相矛盾：其它设备
+// pull 不到任何删除痕迹，本地数据复活/残留。现在改为写 tombstone 行
+// （payload 置空），其它设备 pull 到后删本地行；tombstone 不计入
+// syncStats（tombstone=0 过滤）与行数上限。
 syncRoutes.delete("/rows", requireAuth, async (c) => {
   const user = c.get("user");
   const db = c.get("db");
   const table = checkTableName(c.req.query("table") ?? "");
   const rowId = c.req.query("rowId");
+  const now = Date.now();
   if (rowId) {
-    // 删单行: 直接移除(端上已确认不需要, 不再传播 tombstone)
+    // 删单行：标记 tombstone（保留行以传播删除，其它设备拉到后删本地）。
     await db.execute({
-      sql: "DELETE FROM sync_state WHERE user_id = ? AND table_name = ? AND row_id = ?",
-      args: [user.userId, table, rowId],
+      sql: `INSERT INTO sync_state
+              (user_id, table_name, row_id, updated_at, tombstone, device_id, payload_encrypted, nonce)
+            VALUES (?, ?, ?, ?, 1, ?, NULL, '')
+            ON CONFLICT(user_id, table_name, row_id) DO UPDATE SET
+              updated_at = excluded.updated_at,
+              tombstone  = 1,
+              device_id  = excluded.device_id,
+              payload_encrypted = NULL,
+              nonce      = ''`,
+      args: [user.userId, table, rowId, now, user.deviceId],
     });
   } else {
+    // 整表清空：现存全部行标记 tombstone（传播到其它设备）。
     await db.execute({
-      sql: "DELETE FROM sync_state WHERE user_id = ? AND table_name = ?",
-      args: [user.userId, table],
+      sql: `UPDATE sync_state SET
+              updated_at = ?, tombstone = 1, device_id = ?,
+              payload_encrypted = NULL, nonce = ''
+            WHERE user_id = ? AND table_name = ? AND tombstone = 0`,
+      args: [now, user.deviceId, user.userId, table],
     });
   }
   return c.json({ ok: true, ...(await syncStats(db, user.userId)) });

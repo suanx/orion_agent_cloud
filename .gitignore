@@ -29,3 +29,5 @@ live_admin.html
 
 # EdgeOne 本地构建产物（如手动跑构建脚本生成；线上用平台源码自动构建）
 .edgeone/
+local-vps.db
+*.db

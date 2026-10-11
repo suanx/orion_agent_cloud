@@ -64,9 +64,16 @@ export const onRequest = async (context: EdgeOneContext): Promise<Response> => {
   try {
     return await app.fetch(context.request, context.env, edgeCtx(context));
   } catch (e) {
-    // 模块加载/初始化失败的错误原文直接返回（部署诊断期临时行为）
-    const msg = e instanceof Error ? `${e.name}: ${e.message}\n${e.stack ?? ""}` : String(e);
-    return new Response(JSON.stringify({ moduleError: msg }, null, 2), {
+    // 模块加载/初始化失败（2026-10-11 安全修复 P1）：错误原文含完整堆栈，
+    // 旧实现无条件回给公网调用者（绕过主 app 的 DEBUG_ERRORS 开关）。
+    // 现在仅在 DEBUG_ERRORS=true 时带详情，其余只回通用错误。
+    const detail = e instanceof Error ? `${e.name}: ${e.message}\n${e.stack ?? ""}` : String(e);
+    const show = String(context.env?.DEBUG_ERRORS ?? "") === "true";
+    if (show) console.error("[entry] module error:", detail);
+    const body = show
+      ? JSON.stringify({ moduleError: detail }, null, 2)
+      : JSON.stringify({ error: "internal_error" });
+    return new Response(body, {
       status: 500,
       headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
     });

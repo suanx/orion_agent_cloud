@@ -712,7 +712,16 @@ function toast(msg) {
   t.textContent = msg; t.classList.add('show');
   setTimeout(function(){ t.classList.remove('show'); }, 2200);
 }
-function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+// 2026-10-11 安全修复（P0）：esc 追加引号转义。
+// 原实现 textContent→innerHTML 只转义 & < >，不转义单双引号——
+// 而 email 是用户可控字段（注册正则允许单引号），曾被直接拼进
+// onclick 的 JS 字符串里造成存储型 XSS。现统一转义引号；
+// 用户可控字段的按钮改走 data-* + 事件委托，不再拼 JS 字符串。
+function esc(s) {
+  var d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 function fmtTime(ms) { if (!ms) return '—'; var d = new Date(Number(ms)); return d.toLocaleString('zh-CN', {hour12:false}); }
 
 /**
@@ -1182,8 +1191,10 @@ function loadUsers() {
         + '<td>' + (u.status === 'banned' ? '<span class="badge banned">banned</span>' : '<span class="badge unused">active</span>') + '</td>'
         + '<td class="dim">' + fmtTime(u.created_at) + '</td>'
         + '<td style="text-align:right; white-space:nowrap;">'
-        + '<button class="btn ' + (u.status === 'banned' ? '' : 'danger') + '" style="padding:4px 12px; font-size:12px;" onclick="setBan(\\'' + esc(u.id) + '\\',' + (u.status === 'banned') + ')">' + (u.status === 'banned' ? '解封' : '封禁') + '</button> '
-        + '<button class="btn danger-soft" onclick="confirmDeleteUser(\\'' + esc(u.id) + '\\',\\'' + esc(u.email) + '\\')">删除</button>'
+        // 事件委托（2026-10-11 P0 修复）：email 用户可控，不再拼进
+        // onclick 的 JS 字符串；id/email 经 esc（含引号转义）放 data-*。
+        + '<button class="btn ' + (u.status === 'banned' ? '' : 'danger') + '" style="padding:4px 12px; font-size:12px;" data-act="ban" data-uid="' + esc(u.id) + '" data-banned="' + (u.status === 'banned') + '">' + (u.status === 'banned' ? '解封' : '封禁') + '</button> '
+        + '<button class="btn danger-soft" data-act="deluser" data-uid="' + esc(u.id) + '" data-email="' + esc(u.email) + '">删除</button>'
         + '</td></tr>';
     }
     renderTable('usrTable', html);
@@ -1194,6 +1205,18 @@ function setBan(id, banned) {
     toast(banned ? '已解封' : '已封禁'); loadUsers();
   }).catch(function(e) { toast('操作失败: ' + e.message); });
 }
+
+// 事件委托：用户表按钮（data-act）统一在这里分发（2026-10-11 P0 修复）。
+document.addEventListener('click', function(e) {
+  var t = e.target && e.target.closest ? e.target.closest('[data-act]') : null;
+  if (!t) return;
+  var act = t.getAttribute('data-act');
+  if (act === 'ban') {
+    setBan(t.getAttribute('data-uid'), t.getAttribute('data-banned') === 'true');
+  } else if (act === 'deluser') {
+    confirmDeleteUser(t.getAttribute('data-uid'), t.getAttribute('data-email'));
+  }
+});
 
 // ---------- 删除用户（破坏性操作，两步确认）----------
 // 关闭确认框时记住「待删 id」，由 confirmDeleteUserOk 真正执行。

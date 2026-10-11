@@ -76,7 +76,12 @@ export async function getTask(
   return row ?? null;
 }
 
-/** 游标推进 + 状态更新。终态时补 finished_at。 */
+/** 游标推进 + 状态更新。终态时补 finished_at。
+ *
+ * 2026-10-11 修复（P1）：加 `cursor <= ?` 守卫——此前并发轮询者
+ * （如 App 多次重连）可把游标写回退，导致已投递内容重复下发。
+ * 同时终态写入不允许被并发的 running 推进覆盖（终态优先）。
+ */
 export async function advanceTask(
   db: Client,
   taskId: string,
@@ -84,20 +89,42 @@ export async function advanceTask(
 ): Promise<void> {
   const now = nowMs();
   const terminal = patch.status !== "running";
+  if (terminal) {
+    // 终态：无条件写入（终态一旦确定不可逆）。
+    await db.execute({
+      sql: `UPDATE agent_tasks
+            SET cursor = MAX(cursor, ?), status = ?, error = ?, updated_at = ?,
+                finished_at = ?
+            WHERE task_id = ?`,
+      args: [patch.cursor, patch.status, patch.error ?? null, now, now, taskId],
+    });
+    return;
+  }
+  // running 推进：游标只许前进，且不覆盖已到终态的任务。
   await db.execute({
     sql: `UPDATE agent_tasks
-          SET cursor = ?, status = ?, error = ?, updated_at = ?,
-              finished_at = CASE WHEN ? THEN ? ELSE finished_at END
-          WHERE task_id = ?`,
-    args: [
-      patch.cursor,
-      patch.status,
-      patch.error ?? null,
-      now,
-      terminal ? 1 : 0,
-      now,
-      taskId,
-    ],
+          SET cursor = ?, status = ?, updated_at = ?
+          WHERE task_id = ? AND status = 'running' AND cursor <= ?`,
+    args: [patch.cursor, patch.status, now, taskId, patch.cursor],
+  });
+}
+
+/**
+ * 僵尸任务兜底（2026-10-11 修复，P1）：
+ * 此前只有 App 主动轮询才推进任务状态——App 正常收完 [DONE] 不再轮询、
+ * 或用户卸载 App 时，任务永久停在 running：僵尸无限堆积，App 重开不断
+ * 「续接」早已结束的任务。现在 listActiveTasks 时把超过 24h 仍 running
+ * 的任务标为 failed（任务产物本身仍在 forge run 流里，状态只是记账）。
+ */
+const RUNNING_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function reapStaleTasks(db: Client, userId: string): Promise<void> {
+  const cutoff = nowMs() - RUNNING_TTL_MS;
+  await db.execute({
+    sql: `UPDATE agent_tasks
+          SET status = 'failed', error = '任务超时（超过 24 小时无进展）', finished_at = ?, updated_at = ?
+          WHERE user_id = ? AND status = 'running' AND updated_at < ?`,
+    args: [nowMs(), nowMs(), userId, cutoff],
   });
 }
 
@@ -107,6 +134,7 @@ export async function listActiveTasks(
   userId: string,
   limit = 20,
 ): Promise<AgentTask[]> {
+  await reapStaleTasks(db, userId);
   const r = await db.execute({
     sql: `SELECT task_id, user_id, chat_id, app_session_id, status, cursor, error,
                  created_at, updated_at, finished_at

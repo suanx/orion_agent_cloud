@@ -30,8 +30,14 @@ taskRoutes.post("/", requireAuth, async (c) => {
   const name = String(body.name ?? "").trim().slice(0, 100);
   const prompt = String(body.prompt ?? "").trim().slice(0, 8000);
   const scheduleType = body.scheduleType === "manual" ? "manual" : "daily";
-  const hour = Math.min(Math.max(Number(body.scheduleHour ?? 8), 0), 23);
-  const minute = Math.min(Math.max(Number(body.scheduleMinute ?? 0), 0), 59);
+  // NaN 守卫（2026-10-11）：传 "abc" 时 Number=NaN，clamp 全失效 →
+  // INSERT NaN 或产出 Invalid Date。非法值回落默认。
+  const numOr = (v: unknown, d: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : d;
+  };
+  const hour = Math.min(Math.max(numOr(body.scheduleHour ?? 8, 8), 0), 23);
+  const minute = Math.min(Math.max(numOr(body.scheduleMinute ?? 0, 0), 0), 59);
   if (!name || !prompt) throw errors.badRequest("缺少 name/prompt");
 
   const db = c.get("db");

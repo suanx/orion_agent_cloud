@@ -7,9 +7,17 @@ import { validateRegisterEmail } from "../utils/register-policy";
 import { allocateUsername, loadOrBackfillUsername } from "../services/username";
 import { signJwt, accessTokenTtlSeconds } from "../utils/jwt";
 import { requireAuth } from "../middleware/auth";
+import { rateLimit } from "../middleware/rate-limit";
 import { audit } from "../services/audit";
 
 export const authRoutes = new Hono<Env>();
+
+// 鉴权端点限流（2026-10-11 修复 P1 A-04）：登录/注册/刷新此前可被匿名
+// 高速爆破，PBKDF2 120k 迭代还会放大服务端 CPU 消耗。窗口/上限取舍：
+// 正常用户不可能一分钟登录 5 次以上。
+const loginLimiter = rateLimit({ scope: "login", max: 5, windowMs: 60_000 });
+const registerLimiter = rateLimit({ scope: "register", max: 3, windowMs: 60_000 });
+const refreshLimiter = rateLimit({ scope: "refresh", max: 30, windowMs: 60_000 });
 
 const REFRESH_TTL = 30 * 24 * 3600 * 1000; // 30 天
 
@@ -65,28 +73,40 @@ async function touchDevice(
   deviceId: string,
   deviceName: string
 ) {
-  // 设备数上限: 仅新设备计入; 达到上限拒绝绑定(升级套餐可放宽)
+  // 设备数上限（2026-10-11 原子化）：仅新设备计入。旧实现 COUNT 与
+  // INSERT 之间无锁，并发登录可超绑。现在把「数量检查 + 去重」放进
+  // 单条 INSERT ... SELECT ... WHERE，条件不满足时 rowsAffected=0。
+  const MAX_DEVICES: Record<string, number> = { free: 1, trial: 2, pro: 3, lifetime: 3 };
+  const max = MAX_DEVICES[plan] ?? 1;
   const existing = await db.execute({
     sql: "SELECT 1 FROM devices WHERE user_id = ? AND device_id = ?",
     args: [userId, deviceId],
   });
   if (existing.rows.length === 0) {
-    const MAX_DEVICES: Record<string, number> = { free: 1, trial: 2, pro: 3, lifetime: 3 };
-    const count = await db.execute({
-      sql: "SELECT COUNT(*) AS n FROM devices WHERE user_id = ?",
-      args: [userId],
+    const inserted = await db.execute({
+      sql: `INSERT INTO devices (user_id, device_id, device_name, activated_at, last_seen_at)
+            SELECT ?, ?, ?, ?, ?
+            WHERE (SELECT COUNT(*) FROM devices WHERE user_id = ?) < ?
+              AND NOT EXISTS (SELECT 1 FROM devices WHERE user_id = ? AND device_id = ?)`,
+      args: [userId, deviceId, deviceName, nowMs(), nowMs(), userId, max, userId, deviceId],
     });
-    if (Number(count.rows[0]?.n ?? 0) >= (MAX_DEVICES[plan] ?? 1)) {
-      throw errors.forbidden(
-        `当前套餐最多绑定 ${MAX_DEVICES[plan] ?? 1} 台设备, 请先解绑旧设备或升级套餐`
-      );
+    if (inserted.rowsAffected === 0) {
+      // 区分两种失败：并发下已达上限（拒绝）vs 本设备已被并发登录插入（继续刷新）。
+      const again = await db.execute({
+        sql: "SELECT 1 FROM devices WHERE user_id = ? AND device_id = ?",
+        args: [userId, deviceId],
+      });
+      if (again.rows.length === 0) {
+        throw errors.forbidden(
+          `当前套餐最多绑定 ${max} 台设备, 请先解绑旧设备或升级套餐`
+        );
+      }
     }
+    return;
   }
   await db.execute({
-    sql: `INSERT INTO devices (user_id, device_id, device_name, activated_at, last_seen_at)
-          VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(user_id, device_id) DO UPDATE SET last_seen_at = excluded.last_seen_at`,
-    args: [userId, deviceId, deviceName, nowMs(), nowMs()],
+    sql: "UPDATE devices SET last_seen_at = ?, device_name = ? WHERE user_id = ? AND device_id = ?",
+    args: [nowMs(), deviceName, userId, deviceId],
   });
 }
 
@@ -101,7 +121,7 @@ function missingUsernameColumn(e: unknown): boolean {
 }
 
 // ---- POST /auth/register ----
-authRoutes.post("/register", async (c) => {
+authRoutes.post("/register", registerLimiter, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");
@@ -136,6 +156,12 @@ authRoutes.post("/register", async (c) => {
       // 不要让调用方看到裸 SQLite 报错——这是部署顺序问题，不是用户的问题。
       throw errors.internal("数据库结构未升级，请先执行 node scripts/migrate.mjs");
     }
+    // 并发注册同一邮箱（2026-10-11 修复）：先 SELECT 后 INSERT 的竞态窗口
+    // 会让后者撞 UNIQUE 约束抛裸错误变 500；转为 409。
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.toUpperCase().includes("UNIQUE")) {
+      throw errors.conflict("该邮箱已注册");
+    }
     throw e;
   }
   await touchDevice(db, userId, "free", deviceId, deviceName);
@@ -147,7 +173,7 @@ authRoutes.post("/register", async (c) => {
 });
 
 // ---- POST /auth/login ----
-authRoutes.post("/login", async (c) => {
+authRoutes.post("/login", loginLimiter, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");
@@ -161,7 +187,13 @@ authRoutes.post("/login", async (c) => {
     args: [email],
   });
   const row = r.rows[0];
-  if (!row || !(await verifyPassword(password, String(row.password_hash)))) {
+  if (!row) {
+    // 防邮箱枚举（2026-10-11）：对不存在的用户也做一次等价 PBKDF2 计算，
+    // 消除「不存在用户响应明显更快」的时序差。结果丢弃。
+    await hashPassword(password);
+    throw errors.unauthorized("邮箱或密码错误");
+  }
+  if (!(await verifyPassword(password, String(row.password_hash)))) {
     throw errors.unauthorized("邮箱或密码错误");
   }
   if (String(row.status) !== "active") throw errors.forbidden("账号已被禁用");
@@ -180,7 +212,7 @@ authRoutes.post("/login", async (c) => {
 });
 
 // ---- POST /auth/refresh (轮换) ----
-authRoutes.post("/refresh", async (c) => {
+authRoutes.post("/refresh", refreshLimiter, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const refreshToken = String(body.refreshToken ?? "");
   if (!refreshToken.startsWith("rt_")) throw errors.unauthorized("令牌格式错误");

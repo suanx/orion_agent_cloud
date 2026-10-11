@@ -90,6 +90,12 @@ export async function verifyJwt(token: string, secret: string): Promise<VerifyRe
   if (typeof payload.exp !== "number" || payload.exp * 1000 < Date.now()) {
     return { ok: false, reason: "expired" };
   }
+  // payload 形状校验（2026-10-11 P2）：签名合法但 payload 不是预期对象时
+  // （手签的任意 JSON），sub 为 undefined 会一路传进 SQL 参数变 500。
+  // 这里收敛为 401 语义。
+  if (typeof payload.sub !== "string" || payload.sub.length === 0) {
+    return { ok: false, reason: "malformed" };
+  }
   return { ok: true, payload };
 }
 
