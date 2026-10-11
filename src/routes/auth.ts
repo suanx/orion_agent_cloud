@@ -9,6 +9,7 @@ import { signJwt, accessTokenTtlSeconds } from "../utils/jwt";
 import { requireAuth } from "../middleware/auth";
 import { rateLimit } from "../middleware/rate-limit";
 import { audit } from "../services/audit";
+import { limitFor, parseLimitsOverride } from "../plans";
 
 export const authRoutes = new Hono<Env>();
 
@@ -71,13 +72,17 @@ async function touchDevice(
   userId: string,
   plan: string,
   deviceId: string,
-  deviceName: string
+  deviceName: string,
+  override: Record<string, Record<string, number>> | null = null
 ) {
-  // 设备数上限（2026-10-11 原子化）：仅新设备计入。旧实现 COUNT 与
-  // INSERT 之间无锁，并发登录可超绑。现在把「数量检查 + 去重」放进
-  // 单条 INSERT ... SELECT ... WHERE，条件不满足时 rowsAffected=0。
-  const MAX_DEVICES: Record<string, number> = { free: 1, trial: 2, pro: 3, lifetime: 3 };
-  const max = MAX_DEVICES[plan] ?? 1;
+  // 设备数上限（2026-10-11 原子化 + 可覆盖）：仅新设备计入。上限取
+  // 套餐定义，并支持 PLAN_LIMITS_OVERRIDE 按 plan 覆盖（如给 lifetime
+  // 放宽到 10 台）；与管理台设备管理展示的上限同源。并发下用单条
+  // INSERT ... SELECT ... WHERE 保证「数量检查 + 去重」原子完成。
+  const max =
+    limitFor(plan as never, "max_devices", override) ||
+    { free: 1, trial: 2, pro: 3, lifetime: 3 }[plan as never] ||
+    1;
   const existing = await db.execute({
     sql: "SELECT 1 FROM devices WHERE user_id = ? AND device_id = ?",
     args: [userId, deviceId],
@@ -164,7 +169,7 @@ authRoutes.post("/register", registerLimiter, async (c) => {
     }
     throw e;
   }
-  await touchDevice(db, userId, "free", deviceId, deviceName);
+  await touchDevice(db, userId, "free", deviceId, deviceName, parseLimitsOverride(c.env.PLAN_LIMITS_OVERRIDE));
   const refreshToken = await createSession(db, userId, deviceId, deviceName, "refresh");
   await audit(db, userId, "register", `${username} ${email}`, c.req.header("cf-connecting-ip") ?? "");
 
@@ -203,7 +208,7 @@ authRoutes.post("/login", loginLimiter, async (c) => {
   // 登录是已有用户的唯一入口，这里绝不能因为缺列就让人登不进去 ——
   // 缺列时 username 留空，App 侧回落显示 userId。
   const username = await loadOrBackfillUsername(db, userId);
-  await touchDevice(db, userId, String(row.plan), deviceId, deviceName);
+  await touchDevice(db, userId, String(row.plan), deviceId, deviceName, parseLimitsOverride(c.env.PLAN_LIMITS_OVERRIDE));
   const refreshToken = await createSession(db, userId, deviceId, deviceName, "refresh");
   await audit(db, userId, "login", deviceId, c.req.header("cf-connecting-ip") ?? "");
 

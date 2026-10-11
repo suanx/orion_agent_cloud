@@ -323,6 +323,22 @@ section.view.active { display:block; }
 #confirm .acts { display:flex; gap:10px; justify-content:flex-end; }
 #confirm .acts .btn { min-width:96px; }
 
+/* 设备管理弹窗（2026-10-11 新增）：复用 confirm 的视觉规范 */
+#devModal { display:none; position:fixed; inset:0; z-index:120;
+  align-items:center; justify-content:center; padding:20px;
+  background:var(--scrim); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); }
+#devModal.show { display:flex; }
+#devModal .box { width:min(480px,100%); padding:26px 24px 20px; border-radius:22px; }
+#devModal h3 { font-size:17px; font-weight:800; margin:0 0 10px; display:flex; align-items:center; gap:8px; }
+#devModal .dim { font-size:13px; color:var(--text-dim); }
+#devModal .impact {
+  max-height:260px; overflow:auto; margin-bottom:16px; padding:12px 14px; border-radius:14px;
+  background:var(--hover); font-size:13px; line-height:1.9;
+}
+#devModal .impact .n { float:right; color:var(--text-dim); font-size:12px; }
+#devModal .acts { display:flex; gap:10px; justify-content:flex-end; }
+#devModal .acts .btn { min-width:96px; }
+
 /* ============================================================
    响应式: 移动端适配
    ≤900px  抽屉改为浮出式(遮罩 + 侧滑)
@@ -630,6 +646,19 @@ section.view.active { display:block; }
     <div class="acts">
       <button class="btn ghost" id="cfCancel">取消</button>
       <button class="btn danger" id="cfOk">确认删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- 设备管理（2026-10-11 新增）：查看/解绑用户设备。内容由 showDevices 填。 -->
+<div id="devModal">
+  <div class="box glass">
+    <h3><svg class="ic" aria-hidden="true" style="width:19px;height:19px;vertical-align:-4px;"><use href="#i-users"></use></svg><span id="devTitle">设备管理</span></h3>
+    <p id="devQuota" class="dim"></p>
+    <div class="impact" id="devList"><div class="dim">加载中…</div></div>
+    <div class="acts">
+      <button class="btn ghost" onclick="closeDevices()">关闭</button>
+      <button class="btn ghost" onclick="showDevices(_devUserId)">刷新</button>
     </div>
   </div>
 </div>
@@ -1193,6 +1222,7 @@ function loadUsers() {
         + '<td style="text-align:right; white-space:nowrap;">'
         // 事件委托（2026-10-11 P0 修复）：email 用户可控，不再拼进
         // onclick 的 JS 字符串；id/email 经 esc（含引号转义）放 data-*。
+        + '<button class="btn ghost" style="padding:4px 10px; font-size:12px;" data-act="devices" data-uid="' + esc(u.id) + '">设备(' + esc(String(u.device_count ?? 0)) + ')</button> '
         + '<button class="btn ' + (u.status === 'banned' ? '' : 'danger') + '" style="padding:4px 12px; font-size:12px;" data-act="ban" data-uid="' + esc(u.id) + '" data-banned="' + (u.status === 'banned') + '">' + (u.status === 'banned' ? '解封' : '封禁') + '</button> '
         + '<button class="btn danger-soft" data-act="deluser" data-uid="' + esc(u.id) + '" data-email="' + esc(u.email) + '">删除</button>'
         + '</td></tr>';
@@ -1206,15 +1236,79 @@ function setBan(id, banned) {
   }).catch(function(e) { toast('操作失败: ' + e.message); });
 }
 
+// ---------- 设备管理（2026-10-11 新增） ----------
+var _devUserId = '';
+
+/** 打开某用户的设备列表弹窗。 */
+function showDevices(userId) {
+  _devUserId = userId;
+  document.getElementById('devModal').classList.add('show');
+  document.getElementById('devList').innerHTML = '<div class="dim">加载中…</div>';
+  api('/users/' + encodeURIComponent(userId) + '/devices').then(function(r) {
+    document.getElementById('devTitle').textContent = '设备管理 · ' + (r.plan || '?');
+    document.getElementById('devQuota').textContent =
+      '已绑定 ' + (r.devices || []).length + ' / 上限 ' + (r.maxDevices || 1) + ' 台（上限由套餐决定，可用 PLAN_LIMITS_OVERRIDE 覆盖）';
+    var ds = r.devices || [];
+    if (!ds.length) {
+      document.getElementById('devList').innerHTML = '<div class="dim">该用户没有绑定任何设备。</div>';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < ds.length; i++) {
+      var d = ds[i];
+      var seen = d.last_seen_at ? new Date(Number(d.last_seen_at)).toLocaleString('zh-CN', {hour12:false}) : '—';
+      html += '<div style="margin-bottom:10px;">'
+        + '<div><b>' + esc(d.device_name || '未命名设备') + '</b>'
+        + '<span style="float:right;"><button class="btn danger" style="padding:3px 10px; font-size:12px;" data-dev="' + esc(d.device_id) + '">解绑</button></span></div>'
+        + '<div class="dim" style="font-size:12px; word-break:break-all;">' + esc(d.device_id) + '</div>'
+        + '<div class="dim" style="font-size:12px;">最后活跃 ' + esc(seen) + ' · 活跃会话 ' + esc(String(d.active_sessions)) + '</div>'
+        + '</div>';
+    }
+    document.getElementById('devList').innerHTML = html;
+  }).catch(function(e) {
+    document.getElementById('devList').innerHTML = '<div class="dim">加载失败：' + esc(e.message) + '</div>';
+  });
+}
+
+function closeDevices() {
+  document.getElementById('devModal').classList.remove('show');
+  _devUserId = '';
+}
+
+/** 解绑单台设备（吊销其全部会话，与 App 端自助解绑同语义）。 */
+function unbindDevice(userId, deviceId) {
+  if (!window.confirm('确认解绑该设备？其全部登录会话将被吊销。')) return;
+  api('/users/' + encodeURIComponent(userId) + '/devices/' + encodeURIComponent(deviceId), {method:'DELETE', timeout:30000})
+    .then(function() {
+      toast('设备已解绑');
+      showDevices(userId);
+      loadUsers();
+    })
+    .catch(function(e) { toast('解绑失败: ' + e.message); });
+}
+
 // 事件委托：用户表按钮（data-act）统一在这里分发（2026-10-11 P0 修复）。
 document.addEventListener('click', function(e) {
   var t = e.target && e.target.closest ? e.target.closest('[data-act]') : null;
-  if (!t) return;
-  var act = t.getAttribute('data-act');
-  if (act === 'ban') {
-    setBan(t.getAttribute('data-uid'), t.getAttribute('data-banned') === 'true');
-  } else if (act === 'deluser') {
-    confirmDeleteUser(t.getAttribute('data-uid'), t.getAttribute('data-email'));
+  if (t) {
+    var act = t.getAttribute('data-act');
+    if (act === 'ban') {
+      setBan(t.getAttribute('data-uid'), t.getAttribute('data-banned') === 'true');
+      return;
+    }
+    if (act === 'deluser') {
+      confirmDeleteUser(t.getAttribute('data-uid'), t.getAttribute('data-email'));
+      return;
+    }
+    if (act === 'devices') {
+      showDevices(t.getAttribute('data-uid'));
+      return;
+    }
+  }
+  // 设备弹窗里的解绑按钮（data-dev）
+  var ub = e.target && e.target.closest ? e.target.closest('[data-dev]') : null;
+  if (ub && _devUserId) {
+    unbindDevice(_devUserId, ub.getAttribute('data-dev'));
   }
 });
 

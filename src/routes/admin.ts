@@ -5,7 +5,7 @@ import { nowMs } from "../utils/crypto";
 import { requireAdmin } from "../middleware/auth";
 import { applyPlanGrant, validateAccountPlan } from "../services/account_plans";
 import { audit } from "../services/audit";
-import { weekStartDate } from "../plans";
+import { limitFor, parseLimitsOverride, weekStartDate } from "../plans";
 import { deleteUser, previewDeleteUser } from "../services/user_admin";
 import {
   deleteAgentInstance,
@@ -43,6 +43,62 @@ adminRoutes.get("/users", async (c) => {
     });
   }
   return c.json({ users: r.rows });
+});
+
+// ---- GET /admin/users/:id/devices ----
+// 设备管理（2026-10-11 新增）：列出用户绑定的全部设备与各自活跃会话数，
+// 供管理台解绑。上限取套餐定义 + PLAN_LIMITS_OVERRIDE 覆盖（与登录侧
+// touchDevice 同一来源），在 UI 里展示「已用 / 上限」。
+adminRoutes.get("/users/:id/devices", async (c) => {
+  const id = c.req.param("id");
+  const db = c.get("db");
+  const user = await db.execute({
+    sql: "SELECT plan FROM users WHERE id = ?",
+    args: [id],
+  });
+  if (user.rows.length === 0) throw errors.notFound("用户不存在");
+  const plan = String(user.rows[0].plan);
+  const r = await db.execute({
+    sql: `SELECT d.device_id, d.device_name, d.activated_at, d.last_seen_at,
+                 (SELECT COUNT(*) FROM sessions s
+                   WHERE s.user_id = d.user_id AND s.device_id = d.device_id AND s.revoked = 0)
+                 AS active_sessions
+          FROM devices d WHERE d.user_id = ? ORDER BY d.activated_at ASC`,
+    args: [id],
+  });
+  const max =
+    limitFor(plan as never, "max_devices", parseLimitsOverride(c.env.PLAN_LIMITS_OVERRIDE)) || 1;
+  return c.json({
+    plan,
+    maxDevices: max,
+    devices: r.rows.map((row) => ({
+      deviceId: String(row.device_id),
+      deviceName: String(row.device_name ?? ""),
+      activatedAt: Number(row.activated_at),
+      lastSeenAt: Number(row.last_seen_at),
+      activeSessions: Number(row.active_sessions),
+    })),
+  });
+});
+
+// ---- DELETE /admin/users/:id/devices/:deviceId ----
+// 管理台解绑设备（2026-10-11 新增）：删除设备行 + 吊销该设备全部会话
+// （与 App 端自助解绑同语义）。解绑后该设备下次登录受设备数上限约束。
+adminRoutes.delete("/users/:id/devices/:deviceId", async (c) => {
+  const id = c.req.param("id");
+  const deviceId = c.req.param("deviceId");
+  const db = c.get("db");
+  const r = await db.execute({
+    sql: "DELETE FROM devices WHERE user_id = ? AND device_id = ?",
+    args: [id, deviceId],
+  });
+  if (r.rowsAffected === 0) throw errors.notFound("设备不存在");
+  await db.execute({
+    sql: "UPDATE sessions SET revoked = 1 WHERE user_id = ? AND device_id = ?",
+    args: [id, deviceId],
+  });
+  await audit(db, id, "admin_unbind_device", deviceId, "");
+  return c.json({ ok: true });
 });
 
 // ---- POST /admin/users/:id/ban | unban ----
